@@ -19,6 +19,11 @@
         .header h1 span { color: var(--accent); }
         .header p { color: var(--text2); font-size: 14px; margin-top: 4px; }
 
+        /* 环境检测横幅 */
+        .env-banner { padding: 10px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; text-align: center; }
+        .env-banner.ok { background: rgba(63,185,80,.15); border: 1px solid var(--green); color: var(--green); }
+        .env-banner.err { background: rgba(248,81,73,.15); border: 1px solid var(--red); color: var(--red); }
+
         .status-bar { display: flex; align-items: center; justify-content: space-between; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin-bottom: 16px; }
         .status-indicator { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
         .status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); }
@@ -98,6 +103,8 @@
         <h1>Force<span>DNS</span></h1>
         <p>DNS强制劫持管理面板</p>
     </div>
+
+    <div id="envBanner" class="env-banner err">检测运行环境...</div>
 
     <div class="status-bar">
         <div class="status-indicator">
@@ -205,25 +212,64 @@
 <div class="toast" id="toast"></div>
 
 <script>
-// KSU/APatch WebUI Shell执行桥接
-const CORE_CMD = "sh /data/adb/modules/forcedns/forcedns-core.sh";
+const MOD_PATH = "/data/adb/modules/forcedns";
+const CORE_CMD = "sh " + MOD_PATH + "/forcedns-core.sh";
 
+// 检测运行环境
+let runtimeType = "unknown";
+function detectRuntime() {
+    if (typeof ksu !== 'undefined' && typeof ksu.exec === 'function') {
+        runtimeType = "ksu";
+        return "ksu";
+    }
+    if (typeof apatch !== 'undefined' && typeof apatch.exec === 'function') {
+        runtimeType = "apatch";
+        return "apatch";
+    }
+    // KernelSU 新版可能用 ksux
+    if (typeof ksux !== 'undefined' && typeof ksux.exec === 'function') {
+        runtimeType = "ksux";
+        return "ksux";
+    }
+    runtimeType = "none";
+    return "none";
+}
+
+// 执行shell命令 - 兼容KSU/APatch
 function execCmd(cmd) {
-    return new Promise((resolve, reject) => {
-        if (typeof ksu !== 'undefined') {
-            // KernelSU WebUI
-            ksu.exec(cmd, "", (code, out, err) => {
-                resolve({code, stdout: out, stderr: err});
-            });
-        } else if (typeof apatch !== 'undefined') {
-            // APatch WebUI
-            apatch.exec(cmd, "", (code, out, err) => {
-                resolve({code, stdout: out, stderr: err});
-            });
-        } else {
-            reject(new Error('非KernelSU/APatch环境'));
+    return new Promise((resolve) => {
+        const rt = detectRuntime();
+        const onResult = (code, out, err) => {
+            resolve({ code: code, stdout: out || "", stderr: err || "" });
+        };
+
+        try {
+            if (rt === "ksu") {
+                ksu.exec(cmd, "{}", onResult);
+            } else if (rt === "apatch") {
+                apatch.exec(cmd, "{}", onResult);
+            } else if (rt === "ksux") {
+                ksux.exec(cmd, "{}", onResult);
+            } else {
+                resolve({ code: -1, stdout: "", stderr: "非KernelSU/APatch环境，请在管理器中打开" });
+            }
+        } catch (e) {
+            resolve({ code: -1, stdout: "", stderr: "执行异常: " + e.message });
         }
     });
+}
+
+// 初始化环境检测
+function initEnv() {
+    const banner = document.getElementById('envBanner');
+    const rt = detectRuntime();
+    if (rt === "none") {
+        banner.className = "env-banner err";
+        banner.textContent = "未检测到KernelSU/APatch环境，请在模块管理器中打开此页面";
+    } else {
+        banner.className = "env-banner ok";
+        banner.textContent = "运行环境: " + (rt === "ksu" ? "KernelSU" : rt === "apatch" ? "APatch" : "KernelSU(新)") + " - 就绪";
+    }
 }
 
 // Tab切换
@@ -238,19 +284,25 @@ function switchTab(name) {
     if (name === 'logs') refreshLogs();
 }
 
-function showToast(msg, type = 'success') {
+function showToast(msg, type) {
+    type = type || 'success';
     const t = document.getElementById('toast');
     t.textContent = msg;
     t.className = 'toast show ' + type;
-    setTimeout(() => t.className = 'toast', 2500);
+    setTimeout(function() { t.className = 'toast'; }, 2500);
 }
 
 // 获取状态
 async function getStatus() {
     const res = await execCmd(CORE_CMD + " status");
+    if (res.code !== 0 && !res.stdout) {
+        showToast("获取状态失败: " + (res.stderr || "未知错误"), "error");
+        return null;
+    }
     try {
         return JSON.parse(res.stdout);
     } catch(e) {
+        showToast("解析状态失败: " + res.stdout.substring(0, 100), "error");
         return null;
     }
 }
@@ -258,6 +310,7 @@ async function getStatus() {
 // 获取预设列表
 async function getPresets() {
     const res = await execCmd(CORE_CMD + " presets");
+    if (res.code !== 0 && !res.stdout) return [];
     try {
         return JSON.parse(res.stdout);
     } catch(e) {
@@ -293,19 +346,23 @@ async function loadPresets() {
         grid.innerHTML = '<div class="loading">无预设</div>';
         return;
     }
-    presets.forEach(p => {
+    presets.forEach(function(p) {
         const div = document.createElement('div');
         div.className = 'preset-item' + (p.name === currentPreset ? ' active' : '');
-        div.innerHTML = `<div class="name">${p.name}</div><div class="addr">${p.primary}</div>`;
-        div.onclick = () => applyPreset(p.name);
+        div.innerHTML = '<div class="name">' + p.name + '</div><div class="addr">' + p.primary + '</div>';
+        div.onclick = function() { applyPreset(p.name); };
         grid.appendChild(div);
     });
 }
 
 // 应用预设
 async function applyPreset(name) {
-    await execCmd(CORE_CMD + " apply_preset " + name);
-    showToast('已应用预设: ' + name);
+    const res = await execCmd(CORE_CMD + " apply_preset " + name);
+    if (res.code === 0) {
+        showToast('已应用预设: ' + name);
+    } else {
+        showToast('应用失败: ' + (res.stderr || ''), 'error');
+    }
     updateStatus();
     loadPresets();
 }
@@ -315,26 +372,30 @@ async function applyCustomDNS() {
     const primary = document.getElementById('customPrimary').value.trim();
     const secondary = document.getElementById('customSecondary').value.trim();
     if (!primary) { showToast('请输入主DNS', 'error'); return; }
-    await execCmd(CORE_CMD + " apply_custom " + primary + " " + (secondary || primary));
-    showToast('已应用自定义DNS');
+    const res = await execCmd(CORE_CMD + " apply_custom " + primary + " " + (secondary || primary));
+    if (res.code === 0) {
+        showToast('已应用自定义DNS');
+    } else {
+        showToast('应用失败: ' + (res.stderr || ''), 'error');
+    }
     updateStatus();
     loadPresets();
 }
 
 // 服务控制
 async function startService() {
-    await execCmd(CORE_CMD + " start");
-    showToast('服务已启动');
+    const res = await execCmd(CORE_CMD + " start");
+    showToast(res.code === 0 ? '服务已启动' : '启动失败: ' + (res.stderr || ''), res.code === 0 ? 'success' : 'error');
     updateStatus();
 }
 async function stopService() {
-    await execCmd(CORE_CMD + " stop");
-    showToast('服务已停止');
+    const res = await execCmd(CORE_CMD + " stop");
+    showToast(res.code === 0 ? '服务已停止' : '停止失败: ' + (res.stderr || ''), res.code === 0 ? 'success' : 'error');
     updateStatus();
 }
 async function restartService() {
-    await execCmd(CORE_CMD + " restart");
-    showToast('服务已重启');
+    const res = await execCmd(CORE_CMD + " restart");
+    showToast(res.code === 0 ? '服务已重启' : '重启失败: ' + (res.stderr || ''), res.code === 0 ? 'success' : 'error');
     updateStatus();
 }
 
@@ -342,10 +403,11 @@ async function restartService() {
 async function toggleSetting(key) {
     const s = await getStatus();
     if (!s) return;
-    let val;
+    var val;
     if (key === 'enabled') val = (s.enabled === 1 || s.enabled === true) ? 0 : 1;
     else if (key === 'ipv6') val = (s.hijack_ipv6 === 1 || s.hijack_ipv6 === true) ? 0 : 1;
     else if (key === 'privateDns') val = 1;
+    else return;
     await execCmd(CORE_CMD + " set_config " + key + "=" + val);
     updateStatus();
 }
@@ -356,7 +418,7 @@ async function addWhitelist() {
     if (!uid) return;
     const s = await getStatus();
     if (!s) return;
-    let wl = s.whitelist_uid ? s.whitelist_uid : '';
+    var wl = s.whitelist_uid ? s.whitelist_uid : '';
     wl = (wl + ' ' + uid).trim().replace(/\s+/g, ' ');
     await execCmd(CORE_CMD + " set_config whitelist_uid=" + wl);
     document.getElementById('whitelistUid').value = '';
@@ -365,7 +427,7 @@ async function addWhitelist() {
 async function removeWhitelist(uid) {
     const s = await getStatus();
     if (!s) return;
-    let wl = s.whitelist_uid ? s.whitelist_uid : '';
+    var wl = s.whitelist_uid ? s.whitelist_uid : '';
     wl = wl.replace(new RegExp(uid, 'g'), '').replace(/\s+/g, ' ').trim();
     await execCmd(CORE_CMD + " set_config whitelist_uid=" + wl);
     loadWhitelist();
@@ -379,19 +441,20 @@ async function loadWhitelist() {
         container.innerHTML = '<p style="color:var(--text2);font-size:13px;">白名单中的应用将跳过DNS劫持</p>';
         return;
     }
-    container.innerHTML = uids.map(uid =>
-        `<div class="whitelist-item"><span class="uid">UID: ${uid}</span><span class="remove" onclick="removeWhitelist('${uid}')">移除</span></div>`
-    ).join('');
+    container.innerHTML = uids.map(function(uid) {
+        return '<div class="whitelist-item"><span class="uid">UID: ' + uid + '</span><span class="remove" onclick="removeWhitelist(\'' + uid + '\')">移除</span></div>';
+    }).join('');
 }
 
 // 日志
 async function refreshLogs() {
-    const res = await execCmd("tail -50 /data/adb/modules/forcedns/data/forcedns.log 2>/dev/null || echo '暂无日志'");
+    const res = await execCmd("cat " + MOD_PATH + "/data/forcedns.log 2>/dev/null | tail -50");
     document.getElementById('logBox').textContent = res.stdout || '暂无日志';
     document.getElementById('logBox').scrollTop = document.getElementById('logBox').scrollHeight;
 }
 
 // 初始化
+initEnv();
 updateStatus();
 loadPresets();
 loadWhitelist();
