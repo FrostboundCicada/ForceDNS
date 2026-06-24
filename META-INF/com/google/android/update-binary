@@ -38,5 +38,10 @@ ui_print "  ForceDNS v4.0.0 安装完成"
 ui_print "================================"
 ui_print "  国内DNS: 114.114.114.114 (明文)"
 ui_print "  外网DNS: 1.1.1.1 (DoT加密)"
-ui_print "  点击模块'执行'按钮切换开关"
+ui_print "  正在自动启动..."
 ui_print "================================"
+
+# 安装后立即启动，无需重启
+sh "$MODPATH/forcedns-core.sh" start &
+sleep 2
+sh "$MODPATH/forcedns-core.sh" status
