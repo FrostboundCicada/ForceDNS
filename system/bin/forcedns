@@ -1,0 +1,20 @@
+#!/system/bin/sh
+# ForceDNS 命令行工具
+
+MODDIR=/data/adb/modules/forcedns
+
+case "$1" in
+    start|stop|restart|status|toggle)
+        sh "$MODDIR/forcedns-core.sh" "$@"
+        ;;
+    *)
+        echo "ForceDNS - DNS强制劫持工具"
+        echo "用法: forcedns <命令>"
+        echo ""
+        echo "  start    启动DNS劫持"
+        echo "  stop     停止DNS劫持"
+        echo "  restart  重启DNS劫持"
+        echo "  status   查看运行状态"
+        echo "  toggle   切换开关"
+        ;;
+esac
