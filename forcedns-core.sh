@@ -307,7 +307,7 @@ override_dns() {
     settings put global private_dns_mode off 2>/dev/null
     settings put global private_dns_specifier "" 2>/dev/null
 
-    # 系统resolv.conf
+    # 系统resolv.conf (通过Magisk systemless覆盖，不直接写只读分区)
     mkdir -p "$MODDIR/system/etc"
     echo "nameserver 127.0.0.1" > "$MODDIR/system/etc/resolv.conf"
 
@@ -319,9 +319,10 @@ override_dns() {
         chmod 644 "$termux_resolv" 2>/dev/null
     fi
 
-    for f in /etc/resolv.conf /system/etc/resolv.conf /data/misc/net/resolv.conf; do
-        echo "nameserver 127.0.0.1" > "$f" 2>/dev/null
-    done
+    # /data/misc/net (可写的DNS配置路径)
+    if [ -d "/data/misc/net" ]; then
+        echo "nameserver 127.0.0.1" > /data/misc/net/resolv.conf 2>/dev/null
+    fi
 
     log_msg "DNS配置已覆盖到127.0.0.1"
 }
