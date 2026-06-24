@@ -40,4 +40,9 @@ while true; do
     setprop net.dns1 "127.0.0.1" 2>/dev/null
     setprop net.dns2 "127.0.0.1" 2>/dev/null
     settings put global private_dns_mode off 2>/dev/null
+
+    # 重新覆盖Termux resolv.conf
+    if [ -d "/data/data/com.termux" ]; then
+        echo "nameserver 127.0.0.1" > /data/data/com.termux/files/usr/etc/resolv.conf 2>/dev/null
+    fi
 done &

@@ -208,9 +208,24 @@ disable_system_dns() {
     settings put global private_dns_mode off 2>/dev/null
     settings put global private_dns_specifier "" 2>/dev/null
 
-    # 覆盖resolv.conf
+    # 覆盖系统resolv.conf (Magisk systemless)
     mkdir -p "$MODDIR/system/etc"
     echo "nameserver 127.0.0.1" > "$MODDIR/system/etc/resolv.conf"
+
+    # 覆盖Termux的resolv.conf
+    local termux_resolv="/data/data/com.termux/files/usr/etc/resolv.conf"
+    if [ -d "/data/data/com.termux" ]; then
+        mkdir -p "$(dirname "$termux_resolv")" 2>/dev/null
+        echo "nameserver 127.0.0.1" > "$termux_resolv" 2>/dev/null
+        chmod 644 "$termux_resolv" 2>/dev/null
+        log_msg "Termux resolv.conf已覆盖"
+    fi
+
+    # 覆盖所有可能的resolv.conf路径
+    for f in /etc/resolv.conf /system/etc/resolv.conf /data/misc/net/resolv.conf; do
+        mkdir -p "$(dirname "$f")" 2>/dev/null
+        echo "nameserver 127.0.0.1" > "$f" 2>/dev/null
+    done
 
     log_msg "系统DNS已强制关闭"
 }
@@ -287,6 +302,32 @@ show_status() {
     echo "  dnsmasq: $([ "$dnsmasq_running" = "1" ] && echo "运行中" || echo "未运行")"
     echo "  iptables: $([ "$iptables_active" = "1" ] && echo "已设置" || echo "未设置")"
     echo "  私有DNS: $(settings get global private_dns_mode 2>/dev/null || echo "未知")"
+
+    # DNS验证测试
+    echo ""
+    echo "  --- DNS验证 ---"
+    local current_dns=$(getprop net.dns1 2>/dev/null)
+    echo "  net.dns1: ${current_dns:-未设置}"
+    current_dns=$(getprop net.wlan0.dns1 2>/dev/null)
+    echo "  net.wlan0.dns1: ${current_dns:-未设置}"
+
+    # 检查Termux resolv.conf
+    if [ -f "/data/data/com.termux/files/usr/etc/resolv.conf" ]; then
+        echo "  Termux DNS: $(cat /data/data/com.termux/files/usr/etc/resolv.conf 2>/dev/null | grep nameserver | head -1 | awk '{print $2}')"
+    fi
+
+    # 用nslookup验证实际DNS
+    if command -v nslookup >/dev/null 2>&1; then
+        local ns_result=$(nslookup baidu.com 2>&1 | grep "Server:" | head -1 | awk '{print $2}')
+        if [ -n "$ns_result" ]; then
+            if [ "$ns_result" = "127.0.0.1" ] || [ "$ns_result" = "localhost" ]; then
+                echo "  实际DNS: 127.0.0.1 (劫持生效)"
+            else
+                echo "  实际DNS: $ns_result (劫持未生效!)"
+            fi
+        fi
+    fi
+
     echo "========================================"
 }
 
