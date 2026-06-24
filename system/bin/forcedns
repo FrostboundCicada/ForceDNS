@@ -1,0 +1,29 @@
+#!/system/bin/sh
+# ForceDNS 命令行工具入口
+
+MODDIR=/data/adb/modules/forcedns
+
+case "$1" in
+    start|stop|restart|status|presets|apply_preset|apply_custom|set_config|reload)
+        sh "$MODDIR/forcedns-core.sh" "$@"
+        ;;
+    web)
+        sh "$MODDIR/web/server.sh" start
+        ;;
+    *)
+        echo "ForceDNS - DNS强制劫持工具"
+        echo "用法: forcedns <命令> [参数]"
+        echo ""
+        echo "命令:"
+        echo "  start           启动DNS劫持"
+        echo "  stop            停止DNS劫持"
+        echo "  restart         重启DNS劫持"
+        echo "  status          查看运行状态"
+        echo "  presets         列出预设DNS"
+        echo "  apply_preset <名称>  应用预设DNS"
+        echo "  apply_custom <主> <备>  应用自定义DNS"
+        echo "  set_config <键=值> ...  设置配置"
+        echo "  reload          重新加载配置并重启"
+        echo "  web             启动Web管理界面"
+        ;;
+esac

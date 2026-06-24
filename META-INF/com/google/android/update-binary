@@ -1,0 +1,40 @@
+#!/sbin/sh
+
+######################
+# ForceDNS Installer #
+######################
+
+SKIPUNZIP=0
+
+# 解压模块文件
+unzip -o "$ZIPFILE" -d "$MODPATH" >/dev/null 2>&1
+
+# 设置权限
+chmod 0755 "$MODPATH/system/bin/forcedns"
+chmod 0755 "$MODPATH/forcedns-core.sh"
+chmod 0755 "$MODPATH/post-fs-data.sh"
+chmod 0755 "$MODPATH/service.sh"
+chmod 0755 "$MODPATH/uninstall.sh"
+chmod 0755 "$MODPATH/web/server.sh"
+
+# 创建数据目录
+mkdir -p "$MODPATH/data"
+
+# 检查dnsmasq是否可用
+if ! command -v dnsmasq >/dev/null 2>&1; then
+    ui_print "⚠ 未检测到dnsmasq，将尝试使用模块内置版本"
+fi
+
+# 检查iptables是否可用
+if ! command -v iptables >/dev/null 2>&1; then
+    ui_print "✗ 未检测到iptables，模块可能无法正常工作"
+else
+    ui_print "✓ iptables 可用"
+fi
+
+ui_print "================================"
+ui_print "  ForceDNS 安装完成"
+ui_print "================================"
+ui_print "  管理界面: http://127.0.0.1:8953"
+ui_print "  开机自动启动DNS劫持"
+ui_print "================================"
