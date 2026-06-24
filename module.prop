@@ -1,6 +1,6 @@
 id=forcedns
 name=ForceDNS - DNS强制劫持
-version=v1.0.0
-versionCode=100
+version=v2.0.0
+versionCode=200
 author=ForceDNS
-description=强制劫持系统DNS，通过iptables重定向所有DNS流量到本地dnsmasq，支持Web界面自定义或选择预设DNS服务器，彻底屏蔽运营商DNS劫持
+description=强制关闭系统/运营商DNS，通过iptables劫持所有DNS流量到本地dnsmasq，使用114.114.114.114+1.1.1.1，防火墙阻止DNS绕过。点击模块"执行"按钮切换开关。
