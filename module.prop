@@ -2,5 +2,9 @@ id=forcedns
 name=ForceDNS - DNS强制劫持
 version=v4.0.0
 versionCode=400
+<<<<<<< HEAD
 author=FrostboundCicada
+=======
+author=ForceDNS
+>>>>>>> bd3b7ed707d100d2f2fbdbed6625df8db97fa5d6
 description=DNS强制劫持+加密分流。国内走114.114.114.114(明文)，外网走1.1.1.1(DoT加密防劫持)。内置dnsproxy。点击模块"执行"按钮切换开关。

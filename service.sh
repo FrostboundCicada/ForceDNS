@@ -12,6 +12,7 @@ sleep 5
 # 启动
 sh "$MODDIR/forcedns-core.sh" start &
 
+<<<<<<< HEAD
 # 守护进程
 while true; do
     sleep 30
@@ -23,6 +24,13 @@ while true; do
         ENABLED=1
     fi
 
+=======
+# 守护
+while true; do
+    sleep 30
+
+    . "$MODDIR/data/forcedns.conf" 2>/dev/null
+>>>>>>> bd3b7ed707d100d2f2fbdbed6625df8db97fa5d6
     if [ "$ENABLED" != "1" ]; then
         continue
     fi
@@ -30,7 +38,11 @@ while true; do
     # 检查dnsproxy
     if ! pgrep -f "dnsproxy" >/dev/null 2>&1; then
         if [ -f "$MODDIR/data/dnsproxy.pid" ]; then
+<<<<<<< HEAD
             if ! kill -0 "$(cat "$MODDIR/data/dnsproxy.pid" 2>/dev/null)" 2>/dev/null; then
+=======
+            if ! kill -0 $(cat "$MODDIR/data/dnsproxy.pid" 2>/dev/null) 2>/dev/null; then
+>>>>>>> bd3b7ed707d100d2f2fbdbed6625df8db97fa5d6
                 sh "$MODDIR/forcedns-core.sh" start
             fi
         else
@@ -41,7 +53,11 @@ while true; do
     # 检查dnsmasq
     if ! pgrep -f "dnsmasq.*5353" >/dev/null 2>&1; then
         if [ -f "$MODDIR/data/dnsmasq.pid" ]; then
+<<<<<<< HEAD
             if ! kill -0 "$(cat "$MODDIR/data/dnsmasq.pid" 2>/dev/null)" 2>/dev/null; then
+=======
+            if ! kill -0 $(cat "$MODDIR/data/dnsmasq.pid" 2>/dev/null) 2>/dev/null; then
+>>>>>>> bd3b7ed707d100d2f2fbdbed6625df8db97fa5d6
                 sh "$MODDIR/forcedns-core.sh" start
             fi
         else
@@ -63,4 +79,8 @@ while true; do
     if [ -d "/data/data/com.termux" ]; then
         echo "nameserver 127.0.0.1" > /data/data/com.termux/files/usr/etc/resolv.conf 2>/dev/null
     fi
+<<<<<<< HEAD
 done &
+=======
+done &
+>>>>>>> bd3b7ed707d100d2f2fbdbed6625df8db97fa5d6
