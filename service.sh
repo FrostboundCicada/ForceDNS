@@ -15,8 +15,11 @@ sleep 5
 # 启动DNS劫持服务
 sh "$MODDIR/forcedns-core.sh" start &
 
-# 启动Web管理界面
-sh "$MODDIR/web/server.sh" start &
+# 仅在非KernelSU/APatch环境下启动独立Web服务器
+# KernelSU/APatch通过webroot目录提供WebUI，无需额外服务器
+if [ ! -d "$MODDIR/webroot" ] || [ ! -f "$MODDIR/webroot/index.html" ]; then
+    sh "$MODDIR/web/server.sh" start &
+fi
 
 # 持续监控：如果网络重连则重新应用规则
 while true; do

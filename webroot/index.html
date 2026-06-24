@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ForceDNS</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg: #0d1117; --surface: #161b22; --border: #30363d;
+            --text: #e6edf3; --text2: #8b949e; --accent: #58a6ff;
+            --green: #3fb950; --red: #f85149; --orange: #d29922;
+        }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+        .container { max-width: 800px; margin: 0 auto; padding: 16px; }
+
+        .header { text-align: center; padding: 24px 0 16px; }
+        .header h1 { font-size: 24px; font-weight: 700; }
+        .header h1 span { color: var(--accent); }
+        .header p { color: var(--text2); font-size: 14px; margin-top: 4px; }
+
+        .status-bar { display: flex; align-items: center; justify-content: space-between; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin-bottom: 16px; }
+        .status-indicator { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); }
+        .status-dot.active { background: var(--green); box-shadow: 0 0 8px var(--green); }
+        .status-actions { display: flex; gap: 8px; }
+
+        .btn { padding: 8px 16px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 13px; cursor: pointer; transition: all .2s; }
+        .btn:hover { border-color: var(--accent); }
+        .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+        .btn-primary:hover { background: #79c0ff; }
+        .btn-danger { background: var(--red); color: #fff; border-color: var(--red); }
+        .btn-danger:hover { opacity: .85; }
+        .btn-success { background: var(--green); color: #fff; border-color: var(--green); }
+        .btn-success:hover { opacity: .85; }
+        .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+        .card-title { font-size: 15px; font-weight: 600; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+        .card-title .icon { font-size: 18px; }
+
+        .preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+        .preset-item { padding: 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: all .2s; text-align: center; }
+        .preset-item:hover { border-color: var(--accent); background: rgba(88,166,255,.08); }
+        .preset-item.active { border-color: var(--accent); background: rgba(88,166,255,.15); }
+        .preset-item .name { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+        .preset-item .addr { color: var(--text2); font-size: 11px; }
+
+        .form-group { margin-bottom: 12px; }
+        .form-group label { display: block; font-size: 13px; color: var(--text2); margin-bottom: 4px; }
+        .form-group input { width: 100%; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 14px; outline: none; }
+        .form-group input:focus { border-color: var(--accent); }
+
+        .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; }
+        .toggle-row .label { font-size: 14px; }
+        .toggle-row .desc { font-size: 12px; color: var(--text2); }
+        .toggle { width: 44px; height: 24px; background: var(--border); border-radius: 12px; position: relative; cursor: pointer; transition: background .2s; flex-shrink: 0; }
+        .toggle.active { background: var(--accent); }
+        .toggle::after { content: ''; width: 18px; height: 18px; background: #fff; border-radius: 50%; position: absolute; top: 3px; left: 3px; transition: transform .2s; }
+        .toggle.active::after { transform: translateX(20px); }
+
+        .dns-info { display: flex; gap: 12px; margin-top: 12px; }
+        .dns-box { flex: 1; padding: 12px; background: var(--bg); border-radius: 8px; text-align: center; }
+        .dns-box .label { font-size: 11px; color: var(--text2); margin-bottom: 4px; }
+        .dns-box .value { font-size: 16px; font-weight: 600; font-family: monospace; color: var(--accent); }
+
+        .log-box { background: var(--bg); border-radius: 8px; padding: 12px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.6; color: var(--text2); white-space: pre-wrap; word-break: break-all; }
+        .log-box::-webkit-scrollbar { width: 4px; }
+        .log-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+        .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px); background: var(--surface); border: 1px solid var(--border); padding: 10px 20px; border-radius: 8px; font-size: 14px; transition: transform .3s; z-index: 999; }
+        .toast.show { transform: translateX(-50%) translateY(0); }
+        .toast.success { border-color: var(--green); }
+        .toast.error { border-color: var(--red); }
+
+        .tabs { display: flex; gap: 4px; margin-bottom: 16px; background: var(--surface); border-radius: 8px; padding: 4px; border: 1px solid var(--border); }
+        .tab { flex: 1; text-align: center; padding: 8px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text2); transition: all .2s; }
+        .tab.active { background: var(--accent); color: #fff; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .whitelist-item { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); }
+        .whitelist-item:last-child { border-bottom: none; }
+        .whitelist-item .uid { font-family: monospace; font-size: 13px; }
+        .whitelist-item .remove { color: var(--red); cursor: pointer; font-size: 13px; }
+
+        .loading { text-align: center; padding: 20px; color: var(--text2); }
+
+        @media (max-width: 480px) {
+            .preset-grid { grid-template-columns: repeat(2, 1fr); }
+            .dns-info { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>Force<span>DNS</span></h1>
+        <p>DNS强制劫持管理面板</p>
+    </div>
+
+    <div class="status-bar">
+        <div class="status-indicator">
+            <div class="status-dot" id="statusDot"></div>
+            <span id="statusText">检测中...</span>
+        </div>
+        <div class="status-actions">
+            <button class="btn btn-success" id="btnStart" onclick="startService()">启动</button>
+            <button class="btn btn-danger" id="btnStop" onclick="stopService()">停止</button>
+            <button class="btn" onclick="restartService()">重启</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-title"><span class="icon">&#127760;</span> 当前DNS配置</div>
+        <div class="dns-info">
+            <div class="dns-box">
+                <div class="label">主 DNS</div>
+                <div class="value" id="dnsPrimary">-</div>
+            </div>
+            <div class="dns-box">
+                <div class="label">备 DNS</div>
+                <div class="value" id="dnsSecondary">-</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="tabs">
+        <div class="tab active" onclick="switchTab('presets')">预设DNS</div>
+        <div class="tab" onclick="switchTab('custom')">自定义DNS</div>
+        <div class="tab" onclick="switchTab('settings')">设置</div>
+        <div class="tab" onclick="switchTab('logs')">日志</div>
+    </div>
+
+    <div class="tab-content active" id="tab-presets">
+        <div class="card">
+            <div class="card-title"><span class="icon">&#9889;</span> 预设DNS服务器</div>
+            <div class="preset-grid" id="presetGrid"><div class="loading">加载中...</div></div>
+        </div>
+    </div>
+
+    <div class="tab-content" id="tab-custom">
+        <div class="card">
+            <div class="card-title"><span class="icon">&#9998;</span> 自定义DNS</div>
+            <div class="form-group">
+                <label>主 DNS 服务器</label>
+                <input type="text" id="customPrimary" placeholder="例如: 8.8.8.8">
+            </div>
+            <div class="form-group">
+                <label>备 DNS 服务器</label>
+                <input type="text" id="customSecondary" placeholder="例如: 8.8.4.4">
+            </div>
+            <button class="btn btn-primary" onclick="applyCustomDNS()" style="width:100%">应用自定义DNS</button>
+        </div>
+    </div>
+
+    <div class="tab-content" id="tab-settings">
+        <div class="card">
+            <div class="card-title"><span class="icon">&#9881;</span> 劫持设置</div>
+            <div class="toggle-row">
+                <div>
+                    <div class="label">启用ForceDNS</div>
+                    <div class="desc">开启后自动劫持所有DNS请求</div>
+                </div>
+                <div class="toggle" id="toggleEnabled" onclick="toggleSetting('enabled')"></div>
+            </div>
+            <div class="toggle-row">
+                <div>
+                    <div class="label">IPv6 DNS劫持</div>
+                    <div class="desc">同时劫持IPv6的DNS请求</div>
+                </div>
+                <div class="toggle" id="toggleIpv6" onclick="toggleSetting('ipv6')"></div>
+            </div>
+            <div class="toggle-row">
+                <div>
+                    <div class="label">关闭私有DNS</div>
+                    <div class="desc">强制关闭Android私有DNS防止绕过</div>
+                </div>
+                <div class="toggle active" id="togglePrivateDns" onclick="toggleSetting('privateDns')"></div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-title"><span class="icon">&#128274;</span> 白名单UID</div>
+            <div class="form-group" style="display:flex;gap:8px;">
+                <input type="text" id="whitelistUid" placeholder="输入应用UID" style="flex:1">
+                <button class="btn" onclick="addWhitelist()">添加</button>
+            </div>
+            <div id="whitelistContainer">
+                <p style="color:var(--text2);font-size:13px;">白名单中的应用将跳过DNS劫持</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="tab-content" id="tab-logs">
+        <div class="card">
+            <div class="card-title" style="justify-content:space-between;">
+                <span><span class="icon">&#128220;</span> 运行日志</span>
+                <button class="btn" onclick="refreshLogs()" style="padding:4px 10px;font-size:12px;">刷新</button>
+            </div>
+            <div class="log-box" id="logBox">加载中...</div>
+        </div>
+    </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// KSU/APatch WebUI Shell执行桥接
+const CORE_CMD = "sh /data/adb/modules/forcedns/forcedns-core.sh";
+
+function execCmd(cmd) {
+    return new Promise((resolve, reject) => {
+        if (typeof ksu !== 'undefined') {
+            // KernelSU WebUI
+            ksu.exec(cmd, "", (code, out, err) => {
+                resolve({code, stdout: out, stderr: err});
+            });
+        } else if (typeof apatch !== 'undefined') {
+            // APatch WebUI
+            apatch.exec(cmd, "", (code, out, err) => {
+                resolve({code, stdout: out, stderr: err});
+            });
+        } else {
+            reject(new Error('非KernelSU/APatch环境'));
+        }
+    });
+}
+
+// Tab切换
+function switchTab(name) {
+    document.querySelectorAll('.tab').forEach(t => {
+        t.classList.toggle('active', t.textContent.includes(
+            {presets:'预设',custom:'自定义',settings:'设置',logs:'日志'}[name]
+        ));
+    });
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    if (name === 'logs') refreshLogs();
+}
+
+function showToast(msg, type = 'success') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast show ' + type;
+    setTimeout(() => t.className = 'toast', 2500);
+}
+
+// 获取状态
+async function getStatus() {
+    const res = await execCmd(CORE_CMD + " status");
+    try {
+        return JSON.parse(res.stdout);
+    } catch(e) {
+        return null;
+    }
+}
+
+// 获取预设列表
+async function getPresets() {
+    const res = await execCmd(CORE_CMD + " presets");
+    try {
+        return JSON.parse(res.stdout);
+    } catch(e) {
+        return [];
+    }
+}
+
+// 更新UI状态
+async function updateStatus() {
+    const s = await getStatus();
+    if (!s) return;
+    const dot = document.getElementById('statusDot');
+    const text = document.getElementById('statusText');
+    const running = s.running === 1 || s.running === true;
+    dot.classList.toggle('active', running);
+    text.textContent = running ? '运行中' : '已停止';
+    document.getElementById('dnsPrimary').textContent = s.dns_primary || '-';
+    document.getElementById('dnsSecondary').textContent = s.dns_secondary || '-';
+    document.getElementById('toggleEnabled').classList.toggle('active', s.enabled === 1 || s.enabled === true);
+    document.getElementById('toggleIpv6').classList.toggle('active', s.hijack_ipv6 === 1 || s.hijack_ipv6 === true);
+    document.getElementById('btnStart').disabled = running;
+    document.getElementById('btnStop').disabled = !running;
+}
+
+// 加载预设
+async function loadPresets() {
+    const presets = await getPresets();
+    const s = await getStatus();
+    const currentPreset = s ? s.preset_name : '';
+    const grid = document.getElementById('presetGrid');
+    grid.innerHTML = '';
+    if (!presets || presets.length === 0) {
+        grid.innerHTML = '<div class="loading">无预设</div>';
+        return;
+    }
+    presets.forEach(p => {
+        const div = document.createElement('div');
+        div.className = 'preset-item' + (p.name === currentPreset ? ' active' : '');
+        div.innerHTML = `<div class="name">${p.name}</div><div class="addr">${p.primary}</div>`;
+        div.onclick = () => applyPreset(p.name);
+        grid.appendChild(div);
+    });
+}
+
+// 应用预设
+async function applyPreset(name) {
+    await execCmd(CORE_CMD + " apply_preset " + name);
+    showToast('已应用预设: ' + name);
+    updateStatus();
+    loadPresets();
+}
+
+// 应用自定义DNS
+async function applyCustomDNS() {
+    const primary = document.getElementById('customPrimary').value.trim();
+    const secondary = document.getElementById('customSecondary').value.trim();
+    if (!primary) { showToast('请输入主DNS', 'error'); return; }
+    await execCmd(CORE_CMD + " apply_custom " + primary + " " + (secondary || primary));
+    showToast('已应用自定义DNS');
+    updateStatus();
+    loadPresets();
+}
+
+// 服务控制
+async function startService() {
+    await execCmd(CORE_CMD + " start");
+    showToast('服务已启动');
+    updateStatus();
+}
+async function stopService() {
+    await execCmd(CORE_CMD + " stop");
+    showToast('服务已停止');
+    updateStatus();
+}
+async function restartService() {
+    await execCmd(CORE_CMD + " restart");
+    showToast('服务已重启');
+    updateStatus();
+}
+
+// 设置切换
+async function toggleSetting(key) {
+    const s = await getStatus();
+    if (!s) return;
+    let val;
+    if (key === 'enabled') val = (s.enabled === 1 || s.enabled === true) ? 0 : 1;
+    else if (key === 'ipv6') val = (s.hijack_ipv6 === 1 || s.hijack_ipv6 === true) ? 0 : 1;
+    else if (key === 'privateDns') val = 1;
+    await execCmd(CORE_CMD + " set_config " + key + "=" + val);
+    updateStatus();
+}
+
+// 白名单
+async function addWhitelist() {
+    const uid = document.getElementById('whitelistUid').value.trim();
+    if (!uid) return;
+    const s = await getStatus();
+    if (!s) return;
+    let wl = s.whitelist_uid ? s.whitelist_uid : '';
+    wl = (wl + ' ' + uid).trim().replace(/\s+/g, ' ');
+    await execCmd(CORE_CMD + " set_config whitelist_uid=" + wl);
+    document.getElementById('whitelistUid').value = '';
+    loadWhitelist();
+}
+async function removeWhitelist(uid) {
+    const s = await getStatus();
+    if (!s) return;
+    let wl = s.whitelist_uid ? s.whitelist_uid : '';
+    wl = wl.replace(new RegExp(uid, 'g'), '').replace(/\s+/g, ' ').trim();
+    await execCmd(CORE_CMD + " set_config whitelist_uid=" + wl);
+    loadWhitelist();
+}
+async function loadWhitelist() {
+    const s = await getStatus();
+    if (!s) return;
+    const uids = s.whitelist_uid ? s.whitelist_uid.split(' ').filter(Boolean) : [];
+    const container = document.getElementById('whitelistContainer');
+    if (uids.length === 0) {
+        container.innerHTML = '<p style="color:var(--text2);font-size:13px;">白名单中的应用将跳过DNS劫持</p>';
+        return;
+    }
+    container.innerHTML = uids.map(uid =>
+        `<div class="whitelist-item"><span class="uid">UID: ${uid}</span><span class="remove" onclick="removeWhitelist('${uid}')">移除</span></div>`
+    ).join('');
+}
+
+// 日志
+async function refreshLogs() {
+    const res = await execCmd("tail -50 /data/adb/modules/forcedns/data/forcedns.log 2>/dev/null || echo '暂无日志'");
+    document.getElementById('logBox').textContent = res.stdout || '暂无日志';
+    document.getElementById('logBox').scrollTop = document.getElementById('logBox').scrollHeight;
+}
+
+// 初始化
+updateStatus();
+loadPresets();
+loadWhitelist();
+setInterval(updateStatus, 5000);
+</script>
+</body>
+</html>
