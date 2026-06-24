@@ -46,7 +46,6 @@ port=$PORT_DNSMASQ
 no-resolv
 cache-size=4096
 min-cache-ttl=600
-dns-forward-max=1000
 
 # 默认走dnsproxy(加密外网DNS)
 server=127.0.0.1#$PORT_DNSPROXY
@@ -183,17 +182,15 @@ start_dnsproxy() {
     log_msg "使用dnsproxy: $dnsproxy_bin"
 
     # dnsproxy: 监听5354, 上游用DoT到1.1.1.1:853
+    # 注意: 部分版本dnsproxy用-l代替--listen-address
     $dnsproxy_bin \
-        --listen-address=127.0.0.1 \
-        --port=$PORT_DNSPROXY \
-        --upstream=tls://1.1.1.1 \
-        --upstream=tls://1.0.0.1 \
-        --upstream-mode=load_balance \
+        -l 127.0.0.1 \
+        -p $PORT_DNSPROXY \
+        -u tls://1.1.1.1 \
+        -u tls://1.0.0.1 \
         --cache \
         --cache-size=4096 \
         --cache-min-ttl=300 \
-        --http3 \
-        --verbose \
         >> "$LOG_FILE" 2>&1 &
 
     local pid=$!
@@ -204,12 +201,12 @@ start_dnsproxy() {
         return 0
     fi
 
-    # 备用: 不用http3
+    # 备用: DoH
     $dnsproxy_bin \
-        --listen-address=127.0.0.1 \
-        --port=$PORT_DNSPROXY \
-        --upstream=tls://1.1.1.1 \
-        --upstream=tls://1.0.0.1 \
+        -l 127.0.0.1 \
+        -p $PORT_DNSPROXY \
+        -u https://1.1.1.1/dns-query \
+        -u https://1.0.0.1/dns-query \
         --cache \
         --cache-size=4096 \
         >> "$LOG_FILE" 2>&1 &
@@ -224,10 +221,10 @@ start_dnsproxy() {
 
     # 备用2: DoH
     $dnsproxy_bin \
-        --listen-address=127.0.0.1 \
-        --port=$PORT_DNSPROXY \
-        --upstream=https://1.1.1.1/dns-query \
-        --upstream=https://1.0.0.1/dns-query \
+        -l 127.0.0.1 \
+        -p $PORT_DNSPROXY \
+        -u https://1.1.1.1/dns-query \
+        -u https://1.0.0.1/dns-query \
         --cache \
         --cache-size=4096 \
         >> "$LOG_FILE" 2>&1 &
