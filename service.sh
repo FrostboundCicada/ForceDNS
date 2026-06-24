@@ -9,10 +9,10 @@ while [ "$(getprop sys.boot_completed)" != "1" ]; do
 done
 sleep 5
 
-# 启动DNS劫持服务
+# 启动
 sh "$MODDIR/forcedns-core.sh" start &
 
-# 守护：网络重连后重新应用
+# 守护
 while true; do
     sleep 30
 
@@ -21,28 +21,18 @@ while true; do
         continue
     fi
 
-    # 检查dnsmasq
-    if [ -f "$MODDIR/data/dnsmasq.pid" ]; then
-        pid=$(cat "$MODDIR/data/dnsmasq.pid" 2>/dev/null)
-        if ! kill -0 "$pid" 2>/dev/null; then
-            sh "$MODDIR/forcedns-core.sh" start
-        fi
-    else
-        sh "$MODDIR/forcedns-core.sh" start
-    fi
-
-    # 检查iptables规则
+    # 检查iptables规则是否还在
     if ! iptables -t nat -L FORCEDNS >/dev/null 2>&1; then
         sh "$MODDIR/forcedns-core.sh" start
     fi
 
-    # 重新设置系统DNS（防止被系统覆盖）
-    setprop net.dns1 "127.0.0.1" 2>/dev/null
-    setprop net.dns2 "127.0.0.1" 2>/dev/null
+    # 重新设置DNS（防止被系统/DHCP覆盖）
+    setprop net.dns1 "114.114.114.114" 2>/dev/null
+    setprop net.dns2 "1.1.1.1" 2>/dev/null
     settings put global private_dns_mode off 2>/dev/null
 
     # 重新覆盖Termux resolv.conf
     if [ -d "/data/data/com.termux" ]; then
-        echo "nameserver 127.0.0.1" > /data/data/com.termux/files/usr/etc/resolv.conf 2>/dev/null
+        printf "nameserver 114.114.114.114\nnameserver 1.1.1.1\n" > /data/data/com.termux/files/usr/etc/resolv.conf 2>/dev/null
     fi
 done &

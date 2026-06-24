@@ -1,18 +1,14 @@
 #!/system/bin/sh
 #=============================================
-# ForceDNS 核心脚本
-# 硬编码DNS: 114.114.114.114 + 1.1.1.1
-# 强制关闭系统DNS + 防火墙阻止绕过
+# ForceDNS 核心脚本 v3
+# 无需dnsmasq，纯iptables直接劫持DNS到目标服务器
+# 主DNS: 114.114.114.114  副DNS: 1.1.1.1
 #=============================================
 
 MODDIR=${0%/*}
 CONF_DIR="$MODDIR/data"
 CONF_FILE="$CONF_DIR/forcedns.conf"
-DNSMASQ_CONF="$CONF_DIR/dnsmasq.conf"
-PID_FILE="$CONF_DIR/forcedns.pid"
-DNSMASQ_PID="$CONF_DIR/dnsmasq.pid"
 LOG_FILE="$CONF_DIR/forcedns.log"
-PORT=5353
 
 # 硬编码DNS
 DNS_PRIMARY="114.114.114.114"
@@ -22,7 +18,6 @@ log_msg() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
-# 读取开关状态
 read_config() {
     if [ -f "$CONF_FILE" ]; then
         . "$CONF_FILE"
@@ -37,141 +32,76 @@ save_config() {
     echo "ENABLED=$ENABLED" > "$CONF_FILE"
 }
 
-# 生成dnsmasq配置
-gen_dnsmasq_conf() {
-    mkdir -p "$CONF_DIR"
-    cat > "$DNSMASQ_CONF" << EOF
-port=$PORT
-no-resolv
-server=$DNS_PRIMARY
-server=$DNS_SECONDARY
-cache-size=4096
-min-cache-ttl=3600
-dns-forward-max=1000
-EOF
-    log_msg "dnsmasq配置已生成: $DNS_PRIMARY / $DNS_SECONDARY"
-}
-
-# 启动dnsmasq
-start_dnsmasq() {
-    stop_dnsmasq
-    gen_dnsmasq_conf
-
-    DNSMASQ_BIN=""
-    if command -v dnsmasq >/dev/null 2>&1; then
-        DNSMASQ_BIN="dnsmasq"
-    elif [ -x "$MODDIR/system/bin/dnsmasq" ]; then
-        DNSMASQ_BIN="$MODDIR/system/bin/dnsmasq"
-    else
-        log_msg "错误: 未找到dnsmasq"
-        return 1
-    fi
-
-    $DNSMASQ_BIN -C "$DNSMASQ_CONF" -x "$DNSMASQ_PID" 2>/dev/null && {
-        log_msg "dnsmasq已启动 (端口:$PORT)"
-        return 0
-    }
-
-    # 备用方式
-    $DNSMASQ_BIN -C "$DNSMASQ_CONF" &
-    echo $! > "$DNSMASQ_PID"
-    sleep 1
-    if kill -0 $(cat "$DNSMASQ_PID" 2>/dev/null) 2>/dev/null; then
-        log_msg "dnsmasq已启动(备用方式)"
-        return 0
-    fi
-    return 1
-}
-
-# 停止dnsmasq
-stop_dnsmasq() {
-    if [ -f "$DNSMASQ_PID" ]; then
-        kill $(cat "$DNSMASQ_PID" 2>/dev/null) 2>/dev/null
-        rm -f "$DNSMASQ_PID"
-    fi
-    killall dnsmasq 2>/dev/null
-}
-
-# 设置iptables - DNS劫持 + 防火墙
+# 设置iptables - 直接劫持DNS到目标服务器
 setup_iptables() {
     cleanup_iptables
 
-    # === DNS劫持规则 ===
+    # === DNS劫持: 所有53端口流量直接重定向到114.114.114.114 ===
     iptables -t nat -N FORCEDNS 2>/dev/null
 
-    # 劫持所有UDP/TCP 53端口到本地dnsmasq
-    iptables -t nat -A FORCEDNS -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT
-    iptables -t nat -A FORCEDNS -p tcp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT
+    # 不劫持到114.114.114.114和1.1.1.1自身的流量(防止循环)
+    iptables -t nat -A FORCEDNS -d 114.114.114.114 -j RETURN
+    iptables -t nat -A FORCEDNS -d 1.1.1.1 -j RETURN
+    iptables -t nat -A FORCEDNS -d 1.0.0.1 -j RETURN
+
+    # 劫持所有其他DNS请求到114.114.114.114
+    iptables -t nat -A FORCEDNS -p udp --dport 53 -j DNAT --to-destination 114.114.114.114:53
+    iptables -t nat -A FORCEDNS -p tcp --dport 53 -j DNAT --to-destination 114.114.114.114:53
 
     # 挂载到OUTPUT和PREROUTING
     iptables -t nat -A OUTPUT -j FORCEDNS
-    iptables -t nat -A PREROUTING -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT
-    iptables -t nat -A PREROUTING -p tcp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT
+    iptables -t nat -A PREROUTING -p udp --dport 53 -j DNAT --to-destination 114.114.114.114:53
+    iptables -t nat -A PREROUTING -p tcp --dport 53 -j DNAT --to-destination 114.114.114.114:53
 
-    # IPv6
+    # IPv6 - 重定向到1.1.1.1的IPv6
     ip6tables -t nat -N FORCEDNS 2>/dev/null
-    ip6tables -t nat -A FORCEDNS -p udp --dport 53 -j DNAT --to-destination [::1]:$PORT
-    ip6tables -t nat -A FORCEDNS -p tcp --dport 53 -j DNAT --to-destination [::1]:$PORT
-    ip6tables -t nat -A OUTPUT -j FORCEDNS
-    ip6tables -t nat -A PREROUTING -p udp --dport 53 -j DNAT --to-destination [::1]:$PORT
-    ip6tables -t nat -A PREROUTING -p tcp --dport 53 -j DNAT --to-destination [::1]:$PORT
+    ip6tables -t nat -A FORCEDNS -d 2606:4700:4700::1111/128 -j RETURN 2>/dev/null
+    ip6tables -t nat -A FORCEDNS -d 2606:4700:4700::1001/128 -j RETURN 2>/dev/null
+    ip6tables -t nat -A FORCEDNS -p udp --dport 53 -j DNAT --to-destination [2606:4700:4700::1111]:53 2>/dev/null
+    ip6tables -t nat -A FORCEDNS -p tcp --dport 53 -j DNAT --to-destination [2606:4700:4700::1111]:53 2>/dev/null
+    ip6tables -t nat -A OUTPUT -j FORCEDNS 2>/dev/null
+    ip6tables -t nat -A PREROUTING -p udp --dport 53 -j DNAT --to-destination [2606:4700:4700::1111]:53 2>/dev/null
+    ip6tables -t nat -A PREROUTING -p tcp --dport 53 -j DNAT --to-destination [2606:4700:4700::1111]:53 2>/dev/null
 
-    # === 防火墙规则 - 阻止绕过DNS的直连 ===
+    # === 防火墙: 阻止绕过 ===
     iptables -N FORCEDNS_FW 2>/dev/null
 
-    # 允许本地回环
+    # 允许本地回环和已建立连接
     iptables -A FORCEDNS_FW -o lo -j RETURN
-
-    # 允许已建立的连接
     iptables -A FORCEDNS_FW -m state --state ESTABLISHED,RELATED -j RETURN
 
-    # 允许到DNS服务器的连接(114.114.114.114 和 1.1.1.1)
+    # 允许到授权DNS服务器
     iptables -A FORCEDNS_FW -d 114.114.114.114 -j RETURN
     iptables -A FORCEDNS_FW -d 1.1.1.1 -j RETURN
     iptables -A FORCEDNS_FW -d 1.0.0.1 -j RETURN
+    # 114.114.115.115 (114备用)
+    iptables -A FORCEDNS_FW -d 114.114.115.115 -j RETURN
 
-    # 允许本地DNS(dnsmasq)
-    iptables -A FORCEDNS_FW -d 127.0.0.1 -j RETURN
+    # 阻止直连其他DNS服务器(UDP+TCP 53)
+    for dns in 8.8.8.8 8.8.4.4 9.9.9.9 208.67.222.222 208.67.220.220 \
+               223.5.5.5 223.6.6.6 119.29.29.29 180.76.76.76 \
+               94.140.14.14 94.140.15.15 45.90.28.0 45.90.30.0; do
+        iptables -A FORCEDNS_FW -d $dns -p udp --dport 53 -j DROP
+        iptables -A FORCEDNS_FW -d $dns -p tcp --dport 53 -j DROP
+    done
 
-    # 阻止其他应用直接向非授权DNS服务器发送请求
-    # 常见运营商DNS和公共DNS黑名单(除我们指定的以外)
-    iptables -A FORCEDNS_FW -d 8.8.8.8 -p udp --dport 53 -j DROP
-    iptables -A FORCEDNS_FW -d 8.8.4.4 -p udp --dport 53 -j DROP
-    iptables -A FORCEDNS_FW -d 9.9.9.9 -p udp --dport 53 -j DROP
-    iptables -A FORCEDNS_FW -d 208.67.222.222 -p udp --dport 53 -j DROP
-    iptables -A FORCEDNS_FW -d 208.67.220.220 -p udp --dport 53 -j DROP
-    iptables -A FORCEDNS_FW -d 223.5.5.5 -p udp --dport 53 -j DROP
-    iptables -A FORCEDNS_FW -d 223.6.6.6 -p udp --dport 53 -j DROP
-    iptables -A FORCEDNS_FW -d 119.29.29.29 -p udp --dport 53 -j DROP
-    iptables -A FORCEDNS_FW -d 180.76.76.76 -p udp --dport 53 -j DROP
-    # TCP也阻止
-    iptables -A FORCEDNS_FW -d 8.8.8.8 -p tcp --dport 53 -j DROP
-    iptables -A FORCEDNS_FW -d 8.8.4.4 -p tcp --dport 53 -j DROP
-    iptables -A FORCEDNS_FW -d 9.9.9.9 -p tcp --dport 53 -j DROP
-    iptables -A FORCEDNS_FW -d 208.67.222.222 -p tcp --dport 53 -j DROP
-    iptables -A FORCEDNS_FW -d 223.5.5.5 -p tcp --dport 53 -j DROP
-    iptables -A FORCEDNS_FW -d 223.6.6.6 -p tcp --dport 53 -j DROP
-    iptables -A FORCEDNS_FW -d 119.29.29.29 -p tcp --dport 53 -j DROP
-
-    # 阻止DoH(HTTPS上的DNS)常用端口到已知DoH服务器
-    iptables -A FORCEDNS_FW -d 1.1.1.1 -p tcp --dport 443 -j RETURN
-    iptables -A FORCEDNS_FW -d 1.0.0.1 -p tcp --dport 443 -j RETURN
-    # 阻止Google DoH
+    # 阻止DoH到非授权服务器
     iptables -A FORCEDNS_FW -d 8.8.8.8 -p tcp --dport 443 -j DROP
     iptables -A FORCEDNS_FW -d 8.8.4.4 -p tcp --dport 443 -j DROP
+    iptables -A FORCEDNS_FW -d 9.9.9.9 -p tcp --dport 443 -j DROP
 
-    # 挂载防火墙链
+    # 挂载防火墙
     iptables -A OUTPUT -j FORCEDNS_FW
 
-    log_msg "iptables规则已设置(DNS劫持+防火墙)"
+    log_msg "iptables规则已设置(直接DNAT到114.114.114.114+防火墙)"
 }
 
 # 清理iptables
 cleanup_iptables() {
     # NAT链
     iptables -t nat -D OUTPUT -j FORCEDNS 2>/dev/null
-    iptables -t nat -D PREROUTING -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT 2>/dev/null
-    iptables -t nat -D PREROUTING -p tcp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT 2>/dev/null
+    iptables -t nat -D PREROUTING -p udp --dport 53 -j DNAT --to-destination 114.114.114.114:53 2>/dev/null
+    iptables -t nat -D PREROUTING -p tcp --dport 53 -j DNAT --to-destination 114.114.114.114:53 2>/dev/null
     iptables -t nat -F FORCEDNS 2>/dev/null
     iptables -t nat -X FORCEDNS 2>/dev/null
 
@@ -182,62 +112,59 @@ cleanup_iptables() {
 
     # IPv6
     ip6tables -t nat -D OUTPUT -j FORCEDNS 2>/dev/null
-    ip6tables -t nat -D PREROUTING -p udp --dport 53 -j DNAT --to-destination [::1]:$PORT 2>/dev/null
-    ip6tables -t nat -D PREROUTING -p tcp --dport 53 -j DNAT --to-destination [::1]:$PORT 2>/dev/null
     ip6tables -t nat -F FORCEDNS 2>/dev/null
     ip6tables -t nat -X FORCEDNS 2>/dev/null
 
     log_msg "iptables规则已清理"
 }
 
-# 强制关闭系统DNS
-disable_system_dns() {
-    # 覆盖所有net.dns属性
-    setprop net.dns1 "127.0.0.1"
-    setprop net.dns2 "127.0.0.1"
-    setprop net.wlan0.dns1 "127.0.0.1"
-    setprop net.wlan0.dns2 "127.0.0.1"
-    setprop net.rmnet0.dns1 "127.0.0.1"
-    setprop net.rmnet0.dns2 "127.0.0.1"
-    setprop net.rmnet1.dns1 "127.0.0.1"
-    setprop net.rmnet1.dns2 "127.0.0.1"
-    setprop net.ppp0.dns1 "127.0.0.1"
-    setprop net.ppp0.dns2 "127.0.0.1"
+# 覆盖DNS配置
+override_dns() {
+    # setprop设置DNS到114
+    setprop net.dns1 "$DNS_PRIMARY"
+    setprop net.dns2 "$DNS_SECONDARY"
+    setprop net.wlan0.dns1 "$DNS_PRIMARY"
+    setprop net.wlan0.dns2 "$DNS_SECONDARY"
+    setprop net.rmnet0.dns1 "$DNS_PRIMARY"
+    setprop net.rmnet0.dns2 "$DNS_SECONDARY"
+    setprop net.rmnet1.dns1 "$DNS_PRIMARY"
+    setprop net.rmnet1.dns2 "$DNS_SECONDARY"
+    setprop net.ppp0.dns1 "$DNS_PRIMARY"
+    setprop net.ppp0.dns2 "$DNS_SECONDARY"
 
-    # 关闭Android私有DNS(防止DoH绕过)
+    # 关闭Android私有DNS
     settings put global private_dns_mode off 2>/dev/null
     settings put global private_dns_specifier "" 2>/dev/null
 
-    # 覆盖系统resolv.conf (Magisk systemless)
+    # 覆盖系统resolv.conf
     mkdir -p "$MODDIR/system/etc"
-    echo "nameserver 127.0.0.1" > "$MODDIR/system/etc/resolv.conf"
+    printf "nameserver %s\nnameserver %s\n" "$DNS_PRIMARY" "$DNS_SECONDARY" > "$MODDIR/system/etc/resolv.conf"
 
-    # 覆盖Termux的resolv.conf
+    # 覆盖Termux resolv.conf
     local termux_resolv="/data/data/com.termux/files/usr/etc/resolv.conf"
     if [ -d "/data/data/com.termux" ]; then
         mkdir -p "$(dirname "$termux_resolv")" 2>/dev/null
-        echo "nameserver 127.0.0.1" > "$termux_resolv" 2>/dev/null
+        printf "nameserver %s\nnameserver %s\n" "$DNS_PRIMARY" "$DNS_SECONDARY" > "$termux_resolv" 2>/dev/null
         chmod 644 "$termux_resolv" 2>/dev/null
         log_msg "Termux resolv.conf已覆盖"
     fi
 
-    # 覆盖所有可能的resolv.conf路径
+    # 覆盖其他resolv.conf
     for f in /etc/resolv.conf /system/etc/resolv.conf /data/misc/net/resolv.conf; do
-        mkdir -p "$(dirname "$f")" 2>/dev/null
-        echo "nameserver 127.0.0.1" > "$f" 2>/dev/null
+        printf "nameserver %s\nnameserver %s\n" "$DNS_PRIMARY" "$DNS_SECONDARY" > "$f" 2>/dev/null
     done
 
-    log_msg "系统DNS已强制关闭"
+    log_msg "DNS配置已覆盖: $DNS_PRIMARY / $DNS_SECONDARY"
 }
 
-# 恢复系统DNS
-restore_system_dns() {
+# 恢复DNS
+restore_dns() {
     setprop net.dns1 "" 2>/dev/null
     setprop net.dns2 "" 2>/dev/null
     setprop net.wlan0.dns1 "" 2>/dev/null
     setprop net.wlan0.dns2 "" 2>/dev/null
     settings put global private_dns_mode opportunistic 2>/dev/null
-    log_msg "系统DNS已恢复"
+    log_msg "DNS配置已恢复"
 }
 
 # 启动
@@ -250,81 +177,72 @@ start_forcedns() {
 
     log_msg "========== ForceDNS 启动 =========="
 
-    start_dnsmasq || { log_msg "dnsmasq启动失败"; return 1; }
-    disable_system_dns
+    # 检查iptables
+    if ! command -v iptables >/dev/null 2>&1; then
+        log_msg "错误: iptables不可用"
+        echo "错误: iptables不可用，无法启动"
+        return 1
+    fi
+
+    override_dns
     setup_iptables
 
-    echo $$ > "$PID_FILE"
     log_msg "ForceDNS启动完成 - DNS: $DNS_PRIMARY / $DNS_SECONDARY"
+    echo "ForceDNS 已启动"
 }
 
 # 停止
 stop_forcedns() {
     log_msg "========== ForceDNS 停止 =========="
     cleanup_iptables
-    stop_dnsmasq
-    restore_system_dns
-    rm -f "$PID_FILE"
+    restore_dns
     log_msg "ForceDNS已停止"
+    echo "ForceDNS 已停止"
 }
 
 # 显示状态
 show_status() {
     read_config
-    local dnsmasq_running=0
     local iptables_active=0
-
-    if [ -f "$DNSMASQ_PID" ] && kill -0 $(cat "$DNSMASQ_PID" 2>/dev/null) 2>/dev/null; then
-        dnsmasq_running=1
-    fi
     if iptables -t nat -L FORCEDNS >/dev/null 2>&1; then
         iptables_active=1
     fi
 
-    local running=0
-    [ "$dnsmasq_running" = "1" ] && [ "$iptables_active" = "1" ] && running=1
-
     echo "========================================"
     echo "  ForceDNS 状态"
     echo "========================================"
-    if [ "$ENABLED" = "1" ]; then
-        echo "  模块开关: [开启]"
-    else
-        echo "  模块开关: [关闭]"
-    fi
-    if [ "$running" = "1" ]; then
-        echo "  运行状态: [运行中]"
-    else
-        echo "  运行状态: [已停止]"
-    fi
+    echo "  模块开关: $([ "$ENABLED" = "1" ] && echo "[开启]" || echo "[关闭]")"
+    echo "  运行状态: $([ "$iptables_active" = "1" ] && echo "[运行中]" || echo "[已停止]")"
     echo "  主DNS: $DNS_PRIMARY"
     echo "  副DNS: $DNS_SECONDARY"
-    echo "  dnsmasq: $([ "$dnsmasq_running" = "1" ] && echo "运行中" || echo "未运行")"
     echo "  iptables: $([ "$iptables_active" = "1" ] && echo "已设置" || echo "未设置")"
     echo "  私有DNS: $(settings get global private_dns_mode 2>/dev/null || echo "未知")"
-
-    # DNS验证测试
     echo ""
     echo "  --- DNS验证 ---"
-    local current_dns=$(getprop net.dns1 2>/dev/null)
-    echo "  net.dns1: ${current_dns:-未设置}"
-    current_dns=$(getprop net.wlan0.dns1 2>/dev/null)
-    echo "  net.wlan0.dns1: ${current_dns:-未设置}"
 
-    # 检查Termux resolv.conf
+    # 检查setprop
+    local d1=$(getprop net.dns1 2>/dev/null)
+    local d2=$(getprop net.wlan0.dns1 2>/dev/null)
+    echo "  net.dns1: ${d1:-空(系统自动分配)}"
+    echo "  net.wlan0.dns1: ${d2:-空(系统自动分配)}"
+
+    # Termux
     if [ -f "/data/data/com.termux/files/usr/etc/resolv.conf" ]; then
-        echo "  Termux DNS: $(cat /data/data/com.termux/files/usr/etc/resolv.conf 2>/dev/null | grep nameserver | head -1 | awk '{print $2}')"
+        local tdns=$(grep "^nameserver" /data/data/com.termux/files/usr/etc/resolv.conf 2>/dev/null | head -1 | awk '{print $2}')
+        echo "  Termux DNS: ${tdns:-未设置}"
     fi
 
-    # 用nslookup验证实际DNS
+    # nslookup验证
     if command -v nslookup >/dev/null 2>&1; then
-        local ns_result=$(nslookup baidu.com 2>&1 | grep "Server:" | head -1 | awk '{print $2}')
+        local ns_result=$(nslookup baidu.com 2>&1 | grep -i "server" | head -1 | awk '{print $NF}')
         if [ -n "$ns_result" ]; then
-            if [ "$ns_result" = "127.0.0.1" ] || [ "$ns_result" = "localhost" ]; then
-                echo "  实际DNS: 127.0.0.1 (劫持生效)"
+            if [ "$ns_result" = "$DNS_PRIMARY" ] || [ "$ns_result" = "$DNS_SECONDARY" ]; then
+                echo "  实际DNS: $ns_result (劫持生效!)"
             else
-                echo "  实际DNS: $ns_result (劫持未生效!)"
+                echo "  实际DNS: $ns_result (劫持未生效)"
             fi
+        else
+            echo "  实际DNS: 无法检测"
         fi
     fi
 
@@ -338,17 +256,14 @@ toggle() {
         ENABLED=0
         save_config
         stop_forcedns
-        echo "ForceDNS 已关闭"
     else
         ENABLED=1
         save_config
         start_forcedns
-        echo "ForceDNS 已开启"
     fi
     show_status
 }
 
-# 命令入口
 case "$1" in
     start)   start_forcedns ;;
     stop)    stop_forcedns ;;
