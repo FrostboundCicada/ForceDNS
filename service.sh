@@ -21,6 +21,17 @@ while true; do
         continue
     fi
 
+    # 检查dnsproxy
+    if ! pgrep -f "dnsproxy" >/dev/null 2>&1; then
+        if [ -f "$MODDIR/data/dnsproxy.pid" ]; then
+            if ! kill -0 $(cat "$MODDIR/data/dnsproxy.pid" 2>/dev/null) 2>/dev/null; then
+                sh "$MODDIR/forcedns-core.sh" start
+            fi
+        else
+            sh "$MODDIR/forcedns-core.sh" start
+        fi
+    fi
+
     # 检查dnsmasq
     if ! pgrep -f "dnsmasq.*5353" >/dev/null 2>&1; then
         if [ -f "$MODDIR/data/dnsmasq.pid" ]; then

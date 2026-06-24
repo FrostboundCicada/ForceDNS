@@ -20,6 +20,7 @@ ip6tables -t nat -F FORCEDNS 2>/dev/null
 ip6tables -t nat -X FORCEDNS 2>/dev/null
 
 killall dnsmasq 2>/dev/null
+killall dnsproxy 2>/dev/null
 
 # 恢复系统DNS
 setprop net.dns1 "" 2>/dev/null

@@ -1,26 +1,24 @@
 #!/sbin/sh
 
-######################
-# ForceDNS Installer #
-######################
-
 SKIPUNZIP=0
 
 unzip -o "$ZIPFILE" -d "$MODPATH" >/dev/null 2>&1
 
 chmod 0755 "$MODPATH/system/bin/forcedns"
+chmod 0755 "$MODPATH/system/bin/dnsproxy"
 chmod 0755 "$MODPATH/forcedns-core.sh"
 chmod 0755 "$MODPATH/action.sh"
 chmod 0755 "$MODPATH/post-fs-data.sh"
 chmod 0755 "$MODPATH/service.sh"
 chmod 0755 "$MODPATH/uninstall.sh"
+chmod 0755 "$MODPATH/diag-dnsmasq.sh"
 
 mkdir -p "$MODPATH/data"
 
 if command -v dnsmasq >/dev/null 2>&1; then
     ui_print "✓ dnsmasq 可用"
 else
-    ui_print "⚠ 未检测到dnsmasq，模块可能无法正常工作"
+    ui_print "⚠ 未检测到dnsmasq，将使用纯iptables模式"
 fi
 
 if command -v iptables >/dev/null 2>&1; then
@@ -29,10 +27,16 @@ else
     ui_print "✗ 未检测到iptables"
 fi
 
+if [ -f "$MODPATH/system/bin/dnsproxy" ]; then
+    ui_print "✓ dnsproxy (DoT加密) 已内置"
+else
+    ui_print "⚠ dnsproxy 未找到，外网DNS将使用明文"
+fi
+
 ui_print "================================"
-ui_print "  ForceDNS v2.0.0 安装完成"
+ui_print "  ForceDNS v4.0.0 安装完成"
 ui_print "================================"
-ui_print "  主DNS: 114.114.114.114"
-ui_print "  副DNS: 1.1.1.1"
+ui_print "  国内DNS: 114.114.114.114 (明文)"
+ui_print "  外网DNS: 1.1.1.1 (DoT加密)"
 ui_print "  点击模块'执行'按钮切换开关"
 ui_print "================================"

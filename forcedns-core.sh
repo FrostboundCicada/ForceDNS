@@ -1,8 +1,7 @@
 #!/system/bin/sh
 #=============================================
-# ForceDNS 核心脚本 v3.1
-# dnsmasq智能分流: 国内走114.114.114.114, 外网走1.1.1.1
-# iptables劫持所有DNS到本地dnsmasq
+# ForceDNS 核心脚本 v4.0
+# 架构: iptables → dnsmasq(5353) → 国内走114(明文) / 外网走dnsproxy(5354) → DoT → 1.1.1.1:853
 #=============================================
 
 MODDIR=${0%/*}
@@ -10,8 +9,10 @@ CONF_DIR="$MODDIR/data"
 CONF_FILE="$CONF_DIR/forcedns.conf"
 DNSMASQ_CONF="$CONF_DIR/dnsmasq.conf"
 DNSMASQ_PID="$CONF_DIR/dnsmasq.pid"
+DNSPROXY_PID="$CONF_DIR/dnsproxy.pid"
 LOG_FILE="$CONF_DIR/forcedns.log"
-PORT=5353
+PORT_DNSMASQ=5353
+PORT_DNSPROXY=5354
 
 DNS_DOMESTIC="114.114.114.114"
 DNS_FOREIGN="1.1.1.1"
@@ -34,23 +35,23 @@ save_config() {
     echo "ENABLED=$ENABLED" > "$CONF_FILE"
 }
 
-# 生成dnsmasq配置 - 国内域名走114, 其他走1.1.1.1
+#=============================================
+# dnsmasq配置: 国内域名→114, 其他→dnsproxy(5354)
+#=============================================
 gen_dnsmasq_conf() {
     mkdir -p "$CONF_DIR"
-    cat > "$DNSMASQ_CONF" << 'EOF'
+    cat > "$DNSMASQ_CONF" << EOF
 # ForceDNS dnsmasq 配置
-port=5353
+port=$PORT_DNSMASQ
 no-resolv
 cache-size=4096
 min-cache-ttl=600
 dns-forward-max=1000
-all-servers
 
-# 默认使用1.1.1.1(外网DNS)
-server=1.1.1.1
-server=1.0.0.1
+# 默认走dnsproxy(加密外网DNS)
+server=127.0.0.1#$PORT_DNSPROXY
 
-# 国内域名走114.114.114.114
+# 国内域名走114.114.114.114(明文，国内不会被劫持)
 server=/cn/114.114.114.114
 server=/com.cn/114.114.114.114
 server=/net.cn/114.114.114.114
@@ -96,6 +97,8 @@ server=/zj.cn/114.114.114.114
 server=/baidu.com/114.114.114.114
 server=/qq.com/114.114.114.114
 server=/tencent.com/114.114.114.114
+server=/weixin.qq.com/114.114.114.114
+server=/wechat.com/114.114.114.114
 server=/taobao.com/114.114.114.114
 server=/tmall.com/114.114.114.114
 server=/alibaba.com/114.114.114.114
@@ -126,19 +129,137 @@ server=/ifeng.com/114.114.114.114
 server=/hao123.com/114.114.114.114
 server=/ctrip.com/114.114.114.114
 server=/12306.cn/114.114.114.114
-server=/b站/114.114.114.114
 server=/cnki.net/114.114.114.114
+server=/doubanio.com/114.114.114.114
+server=/aliyuncs.com/114.114.114.114
+server=/aliyun.com/114.114.114.114
+server=/tencentcloudapi.com/114.114.114.114
+server=/qcloud.com/114.114.114.114
+server=/meituan.net/114.114.114.114
+server=/ksapisrv.com/114.114.114.114
+server=/kuaishou.com/114.114.114.114
+server=/ixigua.com/114.114.114.114
+server=/bytedance.com/114.114.114.114
+server=/byteimg.com/114.114.114.114
+server=/feiliao.com/114.114.114.114
+server=/pipix.com/114.114.114.114
+server=/pipilong.com/114.114.114.114
+server=/snssdk.com/114.114.114.114
+server=/amemv.com/114.114.114.114
+server=/musical.ly/114.114.114.114
+server=/iesdouyin.com/114.114.114.114
+server=/bdimg.com/114.114.114.114
+server=/bdstatic.com/114.114.114.114
+server=/bcebos.com/114.114.114.114
+server=/baidubcr.com/114.114.114.114
+server=/baidustatic.com/114.114.114.114
+server=/bcebos.com/114.114.114.114
+server=/qpic.cn/114.114.114.114
+server=/gtimg.cn/114.114.114.114
+server=/idqqimg.com/114.114.114.114
+server=/qlogo.cn/114.114.114.114
+server=/myqcloud.com/114.114.114.114
 EOF
 
-    log_msg "dnsmasq配置已生成: 国内→$DNS_DOMESTIC 外网→$DNS_FOREIGN"
+    log_msg "dnsmasq配置已生成: 国内→$DNS_DOMESTIC 外网→dnsproxy(DoT)"
 }
 
-# 启动dnsmasq
+#=============================================
+# dnsproxy: DoT加密外网DNS查询
+#=============================================
+start_dnsproxy() {
+    stop_dnsproxy
+
+    local dnsproxy_bin=""
+    if [ -x "$MODDIR/system/bin/dnsproxy" ]; then
+        dnsproxy_bin="$MODDIR/system/bin/dnsproxy"
+    elif command -v dnsproxy >/dev/null 2>&1; then
+        dnsproxy_bin=$(which dnsproxy)
+    else
+        log_msg "dnsproxy未找到，外网DNS将使用明文(可能被劫持)"
+        return 1
+    fi
+
+    log_msg "使用dnsproxy: $dnsproxy_bin"
+
+    # dnsproxy: 监听5354, 上游用DoT到1.1.1.1:853
+    $dnsproxy_bin \
+        --listen-address=127.0.0.1 \
+        --port=$PORT_DNSPROXY \
+        --upstream=tls://1.1.1.1 \
+        --upstream=tls://1.0.0.1 \
+        --upstream-mode=load_balance \
+        --cache \
+        --cache-size=4096 \
+        --cache-min-ttl=300 \
+        --http3 \
+        --verbose \
+        >> "$LOG_FILE" 2>&1 &
+
+    local pid=$!
+    sleep 2
+    if kill -0 $pid 2>/dev/null; then
+        echo $pid > "$DNSPROXY_PID"
+        log_msg "dnsproxy已启动 (PID=$pid, DoT→1.1.1.1:853)"
+        return 0
+    fi
+
+    # 备用: 不用http3
+    $dnsproxy_bin \
+        --listen-address=127.0.0.1 \
+        --port=$PORT_DNSPROXY \
+        --upstream=tls://1.1.1.1 \
+        --upstream=tls://1.0.0.1 \
+        --cache \
+        --cache-size=4096 \
+        >> "$LOG_FILE" 2>&1 &
+
+    pid=$!
+    sleep 2
+    if kill -0 $pid 2>/dev/null; then
+        echo $pid > "$DNSPROXY_PID"
+        log_msg "dnsproxy已启动(备用, PID=$pid)"
+        return 0
+    fi
+
+    # 备用2: DoH
+    $dnsproxy_bin \
+        --listen-address=127.0.0.1 \
+        --port=$PORT_DNSPROXY \
+        --upstream=https://1.1.1.1/dns-query \
+        --upstream=https://1.0.0.1/dns-query \
+        --cache \
+        --cache-size=4096 \
+        >> "$LOG_FILE" 2>&1 &
+
+    pid=$!
+    sleep 2
+    if kill -0 $pid 2>/dev/null; then
+        echo $pid > "$DNSPROXY_PID"
+        log_msg "dnsproxy已启动(DoH备用, PID=$pid)"
+        return 0
+    fi
+
+    log_msg "dnsproxy启动失败"
+    return 1
+}
+
+stop_dnsproxy() {
+    if [ -f "$DNSPROXY_PID" ]; then
+        kill $(cat "$DNSPROXY_PID" 2>/dev/null) 2>/dev/null
+        rm -f "$DNSPROXY_PID"
+    fi
+    killall dnsproxy 2>/dev/null
+    sleep 0.5
+}
+
+#=============================================
+# dnsmasq启动
+#=============================================
 start_dnsmasq() {
     stop_dnsmasq
     gen_dnsmasq_conf
 
-    # 查找dnsmasq
     local dnsmasq_bin=""
     if command -v dnsmasq >/dev/null 2>&1; then
         dnsmasq_bin=$(which dnsmasq)
@@ -151,106 +272,81 @@ start_dnsmasq() {
     fi
 
     log_msg "使用dnsmasq: $dnsmasq_bin"
-    log_msg "$($dnsmasq_bin --version 2>&1 | head -1)"
 
-    # 确保/var/run目录存在(部分旧版dnsmasq默认写/var/run/dnsmasq.pid)
+    # 确保/var/run存在(旧版dnsmasq需要)
     mkdir -p /var/run 2>/dev/null
 
-    # 方法1: 指定pid-file路径(兼容旧版dnsmasq，避免找不到/var/run/)
+    # 方法1: 指定pid-file
     $dnsmasq_bin -C "$DNSMASQ_CONF" --user=root --pid-file="$DNSMASQ_PID" 2>>"$LOG_FILE"
     sleep 1
-    if [ -f "$DNSMASQ_PID" ] || pgrep -f "dnsmasq.*5353" >/dev/null 2>&1; then
-        log_msg "dnsmasq已启动(方法1: pid-file指定路径)"
+    if [ -f "$DNSMASQ_PID" ] || pgrep -f "dnsmasq.*$PORT_DNSMASQ" >/dev/null 2>&1; then
+        log_msg "dnsmasq已启动(方法1)"
         return 0
     fi
 
-    # 方法2: 前台模式放后台(--no-daemon不写pidfile，最兼容)
+    # 方法2: no-daemon后台
     $dnsmasq_bin -C "$DNSMASQ_CONF" --user=root --no-daemon 2>>"$LOG_FILE" &
     local pid=$!
     sleep 1
     if kill -0 $pid 2>/dev/null; then
         echo $pid > "$DNSMASQ_PID"
-        log_msg "dnsmasq已启动(方法2: no-daemon后台, PID=$pid)"
+        log_msg "dnsmasq已启动(方法2, PID=$pid)"
         return 0
     fi
 
-    # 方法3: keep-in-foreground模式(-k，不写pidfile)
+    # 方法3: keep-in-foreground
     $dnsmasq_bin -k -C "$DNSMASQ_CONF" --user=root 2>>"$LOG_FILE" &
     pid=$!
     sleep 1
     if kill -0 $pid 2>/dev/null; then
         echo $pid > "$DNSMASQ_PID"
-        log_msg "dnsmasq已启动(方法3: keep-in-foreground, PID=$pid)"
+        log_msg "dnsmasq已启动(方法3, PID=$pid)"
         return 0
     fi
 
-    # 方法4: 最简参数+no-daemon(不依赖配置文件)
-    $dnsmasq_bin --port=5353 --no-resolv --server=114.114.114.114 --server=1.1.1.1 --user=root --no-daemon 2>>"$LOG_FILE" &
-    pid=$!
-    sleep 1
-    if kill -0 $pid 2>/dev/null; then
-        echo $pid > "$DNSMASQ_PID"
-        log_msg "dnsmasq已启动(方法4: 最简no-daemon, PID=$pid)"
-        return 0
-    fi
-
-    # 方法5: 绑定127.0.0.1 + no-daemon(避免绑定问题)
-    $dnsmasq_bin -C "$DNSMASQ_CONF" --listen-address=127.0.0.1 --user=root --no-daemon 2>>"$LOG_FILE" &
-    pid=$!
-    sleep 1
-    if kill -0 $pid 2>/dev/null; then
-        echo $pid > "$DNSMASQ_PID"
-        log_msg "dnsmasq已启动(方法5: 绑定127.0.0.1, PID=$pid)"
-        return 0
-    fi
-
-    log_msg "dnsmasq所有启动方式均失败"
-    echo "dnsmasq启动失败，查看日志: cat $LOG_FILE"
+    log_msg "dnsmasq启动失败"
     return 1
 }
 
-# 停止dnsmasq
 stop_dnsmasq() {
     if [ -f "$DNSMASQ_PID" ]; then
         kill $(cat "$DNSMASQ_PID" 2>/dev/null) 2>/dev/null
         rm -f "$DNSMASQ_PID"
     fi
-    # 杀死所有监听5353端口的dnsmasq
     killall dnsmasq 2>/dev/null
     sleep 0.5
 }
 
-# 设置iptables
+#=============================================
+# iptables规则
+#=============================================
 setup_iptables() {
     cleanup_iptables
 
-    # === DNS劫持: 所有53端口 → 本地5353 ===
+    # DNS劫持: 所有53端口 → 本地dnsmasq(5353)
     iptables -t nat -N FORCEDNS 2>/dev/null
 
-    # 不劫持本地dnsmasq自身的出站请求(防止循环)
+    # 不劫持到授权DNS的出站(防止循环)
     iptables -t nat -A FORCEDNS -d 114.114.114.114 -j RETURN
     iptables -t nat -A FORCEDNS -d 114.114.115.115 -j RETURN
-    iptables -t nat -A FORCEDNS -d 1.1.1.1 -j RETURN
-    iptables -t nat -A FORCEDNS -d 1.0.0.1 -j RETURN
 
     # 劫持所有DNS到本地dnsmasq
-    iptables -t nat -A FORCEDNS -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT
-    iptables -t nat -A FORCEDNS -p tcp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT
+    iptables -t nat -A FORCEDNS -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT_DNSMASQ
+    iptables -t nat -A FORCEDNS -p tcp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT_DNSMASQ
 
-    # 挂载
     iptables -t nat -A OUTPUT -j FORCEDNS
-    iptables -t nat -A PREROUTING -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT
-    iptables -t nat -A PREROUTING -p tcp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT
+    iptables -t nat -A PREROUTING -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT_DNSMASQ
+    iptables -t nat -A PREROUTING -p tcp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT_DNSMASQ
 
     # IPv6
     ip6tables -t nat -N FORCEDNS 2>/dev/null
-    ip6tables -t nat -A FORCEDNS -p udp --dport 53 -j DNAT --to-destination [::1]:$PORT 2>/dev/null
-    ip6tables -t nat -A FORCEDNS -p tcp --dport 53 -j DNAT --to-destination [::1]:$PORT 2>/dev/null
+    ip6tables -t nat -A FORCEDNS -p udp --dport 53 -j DNAT --to-destination [::1]:$PORT_DNSMASQ 2>/dev/null
+    ip6tables -t nat -A FORCEDNS -p tcp --dport 53 -j DNAT --to-destination [::1]:$PORT_DNSMASQ 2>/dev/null
     ip6tables -t nat -A OUTPUT -j FORCEDNS 2>/dev/null
-    ip6tables -t nat -A PREROUTING -p udp --dport 53 -j DNAT --to-destination [::1]:$PORT 2>/dev/null
-    ip6tables -t nat -A PREROUTING -p tcp --dport 53 -j DNAT --to-destination [::1]:$PORT 2>/dev/null
+    ip6tables -t nat -A PREROUTING -p udp --dport 53 -j DNAT --to-destination [::1]:$PORT_DNSMASQ 2>/dev/null
+    ip6tables -t nat -A PREROUTING -p tcp --dport 53 -j DNAT --to-destination [::1]:$PORT_DNSMASQ 2>/dev/null
 
-    # === 防火墙: 阻止绕过 ===
+    # 防火墙: 阻止绕过
     iptables -N FORCEDNS_FW 2>/dev/null
     iptables -A FORCEDNS_FW -o lo -j RETURN
     iptables -A FORCEDNS_FW -m state --state ESTABLISHED,RELATED -j RETURN
@@ -258,8 +354,13 @@ setup_iptables() {
     # 允许授权DNS
     iptables -A FORCEDNS_FW -d 114.114.114.114 -j RETURN
     iptables -A FORCEDNS_FW -d 114.114.115.115 -j RETURN
-    iptables -A FORCEDNS_FW -d 1.1.1.1 -j RETURN
-    iptables -A FORCEDNS_FW -d 1.0.0.1 -j RETURN
+
+    # 允许dnsproxy到1.1.1.1的TLS连接(853端口)
+    iptables -A FORCEDNS_FW -d 1.1.1.1 -p tcp --dport 853 -j RETURN
+    iptables -A FORCEDNS_FW -d 1.0.0.1 -p tcp --dport 853 -j RETURN
+    # DoH (443端口到1.1.1.1)
+    iptables -A FORCEDNS_FW -d 1.1.1.1 -p tcp --dport 443 -j RETURN
+    iptables -A FORCEDNS_FW -d 1.0.0.1 -p tcp --dport 443 -j RETURN
 
     # 阻止其他DNS
     for dns in 8.8.8.8 8.8.4.4 9.9.9.9 208.67.222.222 208.67.220.220 \
@@ -269,7 +370,7 @@ setup_iptables() {
         iptables -A FORCEDNS_FW -d $dns -p tcp --dport 53 -j DROP
     done
 
-    # 阻止DoH绕过
+    # 阻止DoH到非授权服务器
     iptables -A FORCEDNS_FW -d 8.8.8.8 -p tcp --dport 443 -j DROP
     iptables -A FORCEDNS_FW -d 8.8.4.4 -p tcp --dport 443 -j DROP
 
@@ -280,8 +381,8 @@ setup_iptables() {
 
 cleanup_iptables() {
     iptables -t nat -D OUTPUT -j FORCEDNS 2>/dev/null
-    iptables -t nat -D PREROUTING -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT 2>/dev/null
-    iptables -t nat -D PREROUTING -p tcp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT 2>/dev/null
+    iptables -t nat -D PREROUTING -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT_DNSMASQ 2>/dev/null
+    iptables -t nat -D PREROUTING -p tcp --dport 53 -j DNAT --to-destination 127.0.0.1:$PORT_DNSMASQ 2>/dev/null
     iptables -t nat -F FORCEDNS 2>/dev/null
     iptables -t nat -X FORCEDNS 2>/dev/null
     iptables -D OUTPUT -j FORCEDNS_FW 2>/dev/null
@@ -293,7 +394,9 @@ cleanup_iptables() {
     log_msg "iptables规则已清理"
 }
 
-# 覆盖DNS配置
+#=============================================
+# DNS配置覆盖
+#=============================================
 override_dns() {
     setprop net.dns1 "127.0.0.1"
     setprop net.dns2 "127.0.0.1"
@@ -307,7 +410,7 @@ override_dns() {
     settings put global private_dns_mode off 2>/dev/null
     settings put global private_dns_specifier "" 2>/dev/null
 
-    # 系统resolv.conf (通过Magisk systemless覆盖，不直接写只读分区)
+    # Magisk systemless覆盖
     mkdir -p "$MODDIR/system/etc"
     echo "nameserver 127.0.0.1" > "$MODDIR/system/etc/resolv.conf"
 
@@ -319,7 +422,7 @@ override_dns() {
         chmod 644 "$termux_resolv" 2>/dev/null
     fi
 
-    # /data/misc/net (可写的DNS配置路径)
+    # /data/misc/net
     if [ -d "/data/misc/net" ]; then
         echo "nameserver 127.0.0.1" > /data/misc/net/resolv.conf 2>/dev/null
     fi
@@ -336,7 +439,9 @@ restore_dns() {
     log_msg "DNS配置已恢复"
 }
 
-# 启动
+#=============================================
+# 启动/停止
+#=============================================
 start_forcedns() {
     read_config
     if [ "$ENABLED" != "1" ]; then
@@ -352,79 +457,85 @@ start_forcedns() {
         return 1
     fi
 
-    # 启动dnsmasq
+    # 1. 启动dnsproxy(DoT加密外网DNS)
+    local dot_ok=1
+    if ! start_dnsproxy; then
+        dot_ok=0
+        log_msg "dnsproxy启动失败，外网DNS将使用明文(可能被劫持)"
+    fi
+
+    # 2. 启动dnsmasq(分流)
     if ! start_dnsmasq; then
-        log_msg "dnsmasq启动失败，尝试纯iptables模式"
+        log_msg "dnsmasq启动失败，使用纯iptables模式"
         echo "dnsmasq启动失败，使用纯iptables备用模式"
-        # 备用: 纯iptables直接DNAT到114
+        # 备用: 直接DNAT到114
         iptables -t nat -N FORCEDNS 2>/dev/null
         iptables -t nat -A FORCEDNS -d 114.114.114.114 -j RETURN
-        iptables -t nat -A FORCEDNS -d 1.1.1.1 -j RETURN
         iptables -t nat -A FORCEDNS -p udp --dport 53 -j DNAT --to-destination 114.114.114.114:53
         iptables -t nat -A FORCEDNS -p tcp --dport 53 -j DNAT --to-destination 114.114.114.114:53
         iptables -t nat -A OUTPUT -j FORCEDNS
-        iptables -t nat -A PREROUTING -p udp --dport 53 -j DNAT --to-destination 114.114.114.114:53
-        iptables -t nat -A PREROUTING -p tcp --dport 53 -j DNAT --to-destination 114.114.114.114:53
-
-        # 覆盖DNS到114(非本地)
         setprop net.dns1 "114.114.114.114"
         setprop net.dns2 "1.1.1.1"
-        setprop net.wlan0.dns1 "114.114.114.114"
-        setprop net.wlan0.dns2 "1.1.1.1"
-        local termux_resolv="/data/data/com.termux/files/usr/etc/resolv.conf"
-        if [ -d "/data/data/com.termux" ]; then
-            printf "nameserver 114.114.114.114\nnameserver 1.1.1.1\n" > "$termux_resolv" 2>/dev/null
-        fi
         echo "ForceDNS 已启动(备用模式: 全部→114.114.114.114)"
         return 0
     fi
 
+    # 3. 覆盖DNS + 设置iptables
     override_dns
     setup_iptables
 
-    log_msg "ForceDNS启动完成 - 国内: $DNS_DOMESTIC 外网: $DNS_FOREIGN"
-    echo "ForceDNS 已启动 (国内→114, 外网→1.1.1.1)"
+    if [ "$dot_ok" = "1" ]; then
+        log_msg "ForceDNS启动完成 - 国内: $DNS_DOMESTIC(明文) 外网: $DNS_FOREIGN(DoT加密)"
+        echo "ForceDNS 已启动 (国内→114明文, 外网→1.1.1.1 DoT加密)"
+    else
+        log_msg "ForceDNS启动完成(部分) - 国内: $DNS_DOMESTIC 外网: $DNS_FOREIGN(明文,可能被劫持)"
+        echo "ForceDNS 已启动 (国内→114, 外网→1.1.1.1 明文, dnsproxy未启动)"
+    fi
 }
 
-# 停止
 stop_forcedns() {
     log_msg "========== ForceDNS 停止 =========="
     cleanup_iptables
     stop_dnsmasq
+    stop_dnsproxy
     restore_dns
     log_msg "ForceDNS已停止"
     echo "ForceDNS 已停止"
 }
 
-# 显示状态
+#=============================================
+# 状态显示
+#=============================================
 show_status() {
     read_config
     local dnsmasq_running=0
+    local dnsproxy_running=0
     local iptables_active=0
 
     if [ -f "$DNSMASQ_PID" ] && kill -0 $(cat "$DNSMASQ_PID" 2>/dev/null) 2>/dev/null; then
         dnsmasq_running=1
     fi
-    # 也检查进程
-    if [ "$dnsmasq_running" = "0" ] && pgrep -f "dnsmasq.*5353" >/dev/null 2>&1; then
-        dnsmasq_running=1
-    fi
+    [ "$dnsmasq_running" = "0" ] && pgrep -f "dnsmasq.*$PORT_DNSMASQ" >/dev/null 2>&1 && dnsmasq_running=1
 
-    if iptables -t nat -L FORCEDNS >/dev/null 2>&1; then
-        iptables_active=1
+    if [ -f "$DNSPROXY_PID" ] && kill -0 $(cat "$DNSPROXY_PID" 2>/dev/null) 2>/dev/null; then
+        dnsproxy_running=1
     fi
+    [ "$dnsproxy_running" = "0" ] && pgrep -f "dnsproxy" >/dev/null 2>&1 && dnsproxy_running=1
+
+    iptables -t nat -L FORCEDNS >/dev/null 2>&1 && iptables_active=1
 
     local running=0
-    [ "$dnsmasq_running" = "1" ] && [ "$iptables_active" = "1" ] && running=1
+    [ "$iptables_active" = "1" ] && running=1
 
     echo "========================================"
     echo "  ForceDNS 状态"
     echo "========================================"
     echo "  模块开关: $([ "$ENABLED" = "1" ] && echo "[开启]" || echo "[关闭]")"
     echo "  运行状态: $([ "$running" = "1" ] && echo "[运行中]" || echo "[已停止]")"
-    echo "  国内DNS: $DNS_DOMESTIC"
-    echo "  外网DNS: $DNS_FOREIGN"
+    echo "  国内DNS: $DNS_DOMESTIC (明文)"
+    echo "  外网DNS: $DNS_FOREIGN $([ "$dnsproxy_running" = "1" ] && echo "(DoT加密)" || echo "(明文-未加密!)")"
     echo "  dnsmasq: $([ "$dnsmasq_running" = "1" ] && echo "运行中" || echo "未运行")"
+    echo "  dnsproxy: $([ "$dnsproxy_running" = "1" ] && echo "运行中(DoT)" || echo "未运行")"
     echo "  iptables: $([ "$iptables_active" = "1" ] && echo "已设置" || echo "未设置")"
     echo "  私有DNS: $(settings get global private_dns_mode 2>/dev/null || echo "未知")"
     echo ""
@@ -442,11 +553,24 @@ show_status() {
         local ns_result=$(nslookup baidu.com 2>&1 | grep -i "server" | head -1 | awk '{print $NF}')
         if [ -n "$ns_result" ]; then
             if [ "$ns_result" = "127.0.0.1" ]; then
-                echo "  实际DNS: 127.0.0.1 (劫持→dnsmasq生效!)"
-            elif [ "$ns_result" = "$DNS_DOMESTIC" ] || [ "$ns_result" = "$DNS_FOREIGN" ]; then
-                echo "  实际DNS: $ns_result (备用模式生效)"
+                echo "  国内DNS(baidu.com): 127.0.0.1 → dnsmasq → 114 (OK)"
+            elif [ "$ns_result" = "$DNS_DOMESTIC" ]; then
+                echo "  国内DNS(baidu.com): $ns_result (直接模式)"
             else
-                echo "  实际DNS: $ns_result (劫持未生效)"
+                echo "  国内DNS(baidu.com): $ns_result (异常)"
+            fi
+        fi
+
+        local ns2=$(nslookup github.com 2>&1 | grep -i "server" | head -1 | awk '{print $NF}')
+        if [ -n "$ns2" ]; then
+            if [ "$ns2" = "127.0.0.1" ]; then
+                if [ "$dnsproxy_running" = "1" ]; then
+                    echo "  外网DNS(github.com): 127.0.0.1 → dnsmasq → dnsproxy(DoT) → 1.1.1.1 (OK)"
+                else
+                    echo "  外网DNS(github.com): 127.0.0.1 → dnsmasq → 1.1.1.1 (明文,可能被劫持)"
+                fi
+            else
+                echo "  外网DNS(github.com): $ns2 (异常)"
             fi
         fi
     fi
