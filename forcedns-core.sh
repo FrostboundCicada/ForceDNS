@@ -153,43 +153,54 @@ start_dnsmasq() {
     log_msg "使用dnsmasq: $dnsmasq_bin"
     log_msg "$($dnsmasq_bin --version 2>&1 | head -1)"
 
-    # 方法1: 标准启动
+    # 确保/var/run目录存在(部分旧版dnsmasq默认写/var/run/dnsmasq.pid)
+    mkdir -p /var/run 2>/dev/null
+
+    # 方法1: 指定pid-file路径(兼容旧版dnsmasq，避免找不到/var/run/)
     $dnsmasq_bin -C "$DNSMASQ_CONF" --user=root --pid-file="$DNSMASQ_PID" 2>>"$LOG_FILE"
-    if [ $? -eq 0 ]; then
-        sleep 1
-        if [ -f "$DNSMASQ_PID" ] || pgrep -f "dnsmasq.*5353" >/dev/null 2>&1; then
-            log_msg "dnsmasq已启动(方法1)"
-            return 0
-        fi
+    sleep 1
+    if [ -f "$DNSMASQ_PID" ] || pgrep -f "dnsmasq.*5353" >/dev/null 2>&1; then
+        log_msg "dnsmasq已启动(方法1: pid-file指定路径)"
+        return 0
     fi
 
-    # 方法2: 不用pid-file参数
-    $dnsmasq_bin -C "$DNSMASQ_CONF" --user=root 2>>"$LOG_FILE" &
+    # 方法2: 前台模式放后台(--no-daemon不写pidfile，最兼容)
+    $dnsmasq_bin -C "$DNSMASQ_CONF" --user=root --no-daemon 2>>"$LOG_FILE" &
     local pid=$!
     sleep 1
     if kill -0 $pid 2>/dev/null; then
         echo $pid > "$DNSMASQ_PID"
-        log_msg "dnsmasq已启动(方法2, PID=$pid)"
+        log_msg "dnsmasq已启动(方法2: no-daemon后台, PID=$pid)"
         return 0
     fi
 
-    # 方法3: 前台模式放后台
-    $dnsmasq_bin -C "$DNSMASQ_CONF" --user=root --no-daemon 2>>"$LOG_FILE" &
+    # 方法3: keep-in-foreground模式(-k，不写pidfile)
+    $dnsmasq_bin -k -C "$DNSMASQ_CONF" --user=root 2>>"$LOG_FILE" &
     pid=$!
     sleep 1
     if kill -0 $pid 2>/dev/null; then
         echo $pid > "$DNSMASQ_PID"
-        log_msg "dnsmasq已启动(方法3, PID=$pid)"
+        log_msg "dnsmasq已启动(方法3: keep-in-foreground, PID=$pid)"
         return 0
     fi
 
-    # 方法4: 最简参数
-    $dnsmasq_bin --port=5353 --no-resolv --server=114.114.114.114 --server=1.1.1.1 --user=root 2>>"$LOG_FILE" &
+    # 方法4: 最简参数+no-daemon(不依赖配置文件)
+    $dnsmasq_bin --port=5353 --no-resolv --server=114.114.114.114 --server=1.1.1.1 --user=root --no-daemon 2>>"$LOG_FILE" &
     pid=$!
     sleep 1
     if kill -0 $pid 2>/dev/null; then
         echo $pid > "$DNSMASQ_PID"
-        log_msg "dnsmasq已启动(方法4最简, PID=$pid)"
+        log_msg "dnsmasq已启动(方法4: 最简no-daemon, PID=$pid)"
+        return 0
+    fi
+
+    # 方法5: 绑定127.0.0.1 + no-daemon(避免绑定问题)
+    $dnsmasq_bin -C "$DNSMASQ_CONF" --listen-address=127.0.0.1 --user=root --no-daemon 2>>"$LOG_FILE" &
+    pid=$!
+    sleep 1
+    if kill -0 $pid 2>/dev/null; then
+        echo $pid > "$DNSMASQ_PID"
+        log_msg "dnsmasq已启动(方法5: 绑定127.0.0.1, PID=$pid)"
         return 0
     fi
 
