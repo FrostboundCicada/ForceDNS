@@ -1,6 +1,6 @@
 id=forcedns
 name=ForceDNS - DNS强制劫持
-version=v3.0.0
-versionCode=300
+version=v3.1.0
+versionCode=310
 author=ForceDNS
-description=纯iptables DNS劫持，无需dnsmasq。强制所有DNS流量走114.114.114.114+1.1.1.1，防火墙阻止绕过。点击模块"执行"按钮切换开关。
+description=dnsmasq智能分流DNS劫持。国内域名走114.114.114.114，外网走1.1.1.1。iptables劫持+防火墙阻止绕过。点击模块"执行"按钮切换开关。

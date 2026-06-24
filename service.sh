@@ -21,18 +21,29 @@ while true; do
         continue
     fi
 
-    # 检查iptables规则是否还在
+    # 检查dnsmasq
+    if ! pgrep -f "dnsmasq.*5353" >/dev/null 2>&1; then
+        if [ -f "$MODDIR/data/dnsmasq.pid" ]; then
+            if ! kill -0 $(cat "$MODDIR/data/dnsmasq.pid" 2>/dev/null) 2>/dev/null; then
+                sh "$MODDIR/forcedns-core.sh" start
+            fi
+        else
+            sh "$MODDIR/forcedns-core.sh" start
+        fi
+    fi
+
+    # 检查iptables
     if ! iptables -t nat -L FORCEDNS >/dev/null 2>&1; then
         sh "$MODDIR/forcedns-core.sh" start
     fi
 
-    # 重新设置DNS（防止被系统/DHCP覆盖）
-    setprop net.dns1 "114.114.114.114" 2>/dev/null
-    setprop net.dns2 "1.1.1.1" 2>/dev/null
+    # 重新设置DNS
+    setprop net.dns1 "127.0.0.1" 2>/dev/null
+    setprop net.dns2 "127.0.0.1" 2>/dev/null
     settings put global private_dns_mode off 2>/dev/null
 
-    # 重新覆盖Termux resolv.conf
+    # 覆盖Termux
     if [ -d "/data/data/com.termux" ]; then
-        printf "nameserver 114.114.114.114\nnameserver 1.1.1.1\n" > /data/data/com.termux/files/usr/etc/resolv.conf 2>/dev/null
+        echo "nameserver 127.0.0.1" > /data/data/com.termux/files/usr/etc/resolv.conf 2>/dev/null
     fi
 done &
